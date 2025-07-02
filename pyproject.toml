@@ -1,0 +1,26 @@
+[project]
+name = "py-atranscribe"
+version = "0.1.0"
+description = "Automated audio folder transcription and speaker diarization for Docker. Monitors a directory for new audio files, transcribes with faster-whisper, applies pyannote diarization, and outputs timestamped, speaker-labeled transcripts in multiple formats. Robust, container-ready, and fully configurable."
+readme = "README.md"
+requires-python = ">=3.11.11"
+dependencies = [
+    "ruff>=0.12.1",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "T20", "RUF"]
+ignore = ["E501", "F401", "T201"]
+fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*" = ["T201", "S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

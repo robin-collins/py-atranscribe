@@ -1,0 +1,140 @@
+# Docker Compose configuration for py-atranscribe
+# Automated Audio Transcription with Speaker Diarization
+
+version: '3.8'
+
+services:
+  transcriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: py-atranscribe
+    restart: unless-stopped
+
+    # Environment variables
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - LOG_LEVEL=INFO
+      - HF_TOKEN=${HF_TOKEN:-}  # Set your HuggingFace token
+
+      # Directory overrides
+      - INPUT_DIR=/data/in
+      - OUTPUT_DIR=/data/out
+      - BACKUP_DIR=/data/backup
+      - TEMP_DIR=/tmp/transcribe
+
+      # Transcription settings
+      - TRANSCRIPTION__WHISPER__MODEL_SIZE=${WHISPER_MODEL:-medium}
+      - TRANSCRIPTION__WHISPER__DEVICE=${DEVICE:-auto}
+      - TRANSCRIPTION__LANGUAGE=${LANGUAGE:-auto}
+
+      # Diarization settings
+      - DIARIZATION__ENABLED=${DIARIZATION_ENABLED:-true}
+      - DIARIZATION__MIN_SPEAKERS=${MIN_SPEAKERS:-1}
+      - DIARIZATION__MAX_SPEAKERS=${MAX_SPEAKERS:-10}
+
+      # Output settings
+      - TRANSCRIPTION__OUTPUT_FORMATS=${OUTPUT_FORMATS:-srt,webvtt,txt,json}
+
+      # Post-processing
+      - POST_PROCESSING__ACTION=${POST_PROCESSING_ACTION:-move}
+
+      # Performance settings
+      - PERFORMANCE__MAX_CONCURRENT_FILES=${MAX_CONCURRENT_FILES:-2}
+      - PERFORMANCE__MAX_MEMORY_USAGE_GB=${MAX_MEMORY_GB:-8.0}
+
+    # Volume mounts
+    volumes:
+      - ./audio/input:/data/in
+      - ./audio/output:/data/out
+      - ./audio/backup:/data/backup
+      - transcribe-cache:/home/transcribe/.cache
+      - transcribe-models:/root/.cache  # For model caching
+
+    # Port mapping for health checks
+    ports:
+      - "8000:8000"  # Health check endpoint
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+
+#    GPU support (uncomment if using GPU)
+#    deploy:
+#      resources:
+#        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: py-atranscribe-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    profiles:
+      - monitoring
+
+  # Optional: Grafana dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: py-atranscribe-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    profiles:
+      - monitoring
+
+# Named volumes
+volumes:
+  transcribe-cache:
+    driver: local
+  transcribe-models:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+# Networks
+networks:
+  default:
+    name: py-atranscribe-network

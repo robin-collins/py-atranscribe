@@ -1,0 +1,149 @@
+# Configuration for Automated Audio Transcription with Speaker Diarization
+
+# Directories (can be overridden by environment variables)
+directories:
+  input: "/data/in"           # INPUT_DIR
+  output: "/data/out"         # OUTPUT_DIR
+  backup: "/data/backup"      # BACKUP_DIR
+  temp: "/tmp/transcribe"     # TEMP_DIR
+
+# File monitoring settings
+monitoring:
+  # Supported audio/video formats
+  supported_formats:
+    - ".wav"
+    - ".mp3"
+    - ".flac"
+    - ".m4a"
+    - ".aac"
+    - ".ogg"
+    - ".opus"
+    - ".wma"
+    - ".aiff"
+    - ".au"
+    - ".mp4"
+    - ".mkv"
+    - ".avi"
+    - ".mov"
+    - ".wmv"
+    - ".flv"
+    - ".webm"
+    - ".3gp"
+    - ".m4v"
+    - ".f4v"
+    - ".asf"
+    - ".rm"
+    - ".rmvb"
+    - ".vob"
+    - ".ts"
+    - ".mts"
+    - ".m2ts"
+    - ".divx"
+    - ".xvid"
+    - ".dv"
+    - ".f4a"
+    - ".f4b"
+  
+  # File stability check (seconds to wait before processing)
+  stability_delay: 5
+  
+  # Polling interval (seconds)
+  poll_interval: 1
+
+# Transcription settings
+transcription:
+  # Whisper model configuration
+  whisper:
+    model_size: "medium"        # tiny, base, small, medium, large-v1, large-v2, large-v3
+    device: "auto"              # auto, cpu, cuda
+    compute_type: "auto"        # auto, int8, int16, float16, float32
+    cpu_threads: 0              # 0 = auto
+    num_workers: 1              # Number of parallel workers
+    
+  # Audio preprocessing
+  preprocessing:
+    enable_vad: true            # Voice Activity Detection
+    vad_threshold: 0.5          # VAD confidence threshold
+    enable_bgm_separation: false # Background music separation (requires UVR)
+    chunk_length_s: 30          # Audio chunk duration for processing
+    
+  # Language detection
+  language: "auto"              # auto or specific language code (en, es, fr, etc.)
+  
+  # Output options
+  output_formats:
+    - "srt"                     # SubRip subtitle format
+    - "webvtt"                  # WebVTT subtitle format
+    - "txt"                     # Plain text transcript
+    - "json"                    # JSON with detailed timestamps
+    - "tsv"                     # Tab-separated values
+    - "lrc"                     # LRC lyric format
+
+# Speaker diarization settings
+diarization:
+  enabled: true
+  # HuggingFace token required for pyannote models
+  hf_token: "${HF_TOKEN}"       # Set via environment variable
+  
+  # Diarization model settings
+  model: "pyannote/speaker-diarization-3.1"
+  device: "auto"                # auto, cpu, cuda
+  
+  # Speaker parameters
+  min_speakers: 1
+  max_speakers: 10
+  
+  # Embedding model for speaker recognition
+  embedding_model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+
+# File handling after processing
+post_processing:
+  action: "move"                # "move", "delete", "keep"
+  # Only applies if action is "move"
+  backup_structure: "date"      # "flat", "date", "original"
+
+# Performance optimization
+performance:
+  # Memory management
+  max_memory_usage_gb: 8.0      # Maximum memory usage limit
+  enable_model_offload: true    # Offload models to save GPU memory
+  gpu_memory_fraction: 0.8      # Fraction of GPU memory to use
+  
+  # Processing limits
+  max_concurrent_files: 2       # Maximum files to process simultaneously
+  batch_size: 16                # Batch size for model inference
+  
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    base_delay: 1.0
+    max_delay: 60.0
+    exponential_base: 2.0
+    jitter: true
+
+# Logging configuration
+logging:
+  level: "INFO"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "structured"          # "structured" (JSON) or "plain"
+  file_enabled: false           # Enable file logging (in addition to stdout)
+  file_path: "/var/log/transcribe.log"
+
+# Health check settings
+health_check:
+  enabled: true
+  port: 8000
+  host: "0.0.0.0"
+  
+  # Health check thresholds
+  disk_space_min_gb: 1.0
+  memory_usage_max_percent: 90.0
+  queue_size_max: 100
+
+# Monitoring and metrics
+monitoring:
+  enabled: false                # Enable Prometheus metrics
+  port: 9090
+  
+  # Metrics collection intervals
+  system_metrics_interval: 30   # seconds
+  processing_metrics_interval: 10  # seconds
