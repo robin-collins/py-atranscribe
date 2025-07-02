@@ -1,12 +1,14 @@
 """Factory for creating Whisper inference instances.
+
 Provides centralized model management and configuration.
+
 """
 
 import contextlib
 import gc
 import logging
 import os
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 from faster_whisper import WhisperModel
@@ -17,13 +19,16 @@ from src.utils.error_handling import ModelError, graceful_degradation, retry_on_
 
 class WhisperFactory:
     """Factory class for creating and managing Whisper model instances.
+
     Implements model caching, device detection, and graceful degradation.
+
     """
 
-    _instances: dict[str, WhisperModel] = {}
-    _device_cache: str | None = None
+    _instances: ClassVar[dict[str, WhisperModel]] = {}
+    _device_cache: ClassVar[str | None] = None
 
     def __init__(self) -> None:
+        """Initialize WhisperFactory."""
         self.logger = logging.getLogger(__name__)
 
     @classmethod
@@ -37,7 +42,7 @@ class WhisperFactory:
                     torch.cuda.empty_cache()
                 gc.collect()
             except Exception as e:
-                logging.getLogger(__name__).warning(f"Error clearing model cache: {e}")
+                logging.getLogger(__name__).warning("Error clearing model cache: %s", e)
 
         cls._instances.clear()
         logging.getLogger(__name__).info("Whisper model cache cleared")
@@ -63,15 +68,15 @@ class WhisperFactory:
                 if gpu_memory_gb >= 2.0:
                     cls._device_cache = "cuda"
                     logging.getLogger(__name__).info(
-                        f"Using CUDA device with {gpu_memory_gb:.1f}GB memory",
+                        "Using CUDA device with %.1fGB memory", gpu_memory_gb,
                     )
                     return "cuda"
                 logging.getLogger(__name__).warning(
-                    f"GPU has insufficient memory ({gpu_memory_gb:.1f}GB), using CPU",
+                    "GPU has insufficient memory (%.1fGB), using CPU", gpu_memory_gb,
                 )
             except Exception as e:
                 logging.getLogger(__name__).warning(
-                    f"Error checking GPU memory, using CPU: {e}",
+                    "Error checking GPU memory, using CPU: %s", e,
                 )
 
         cls._device_cache = "cpu"
@@ -180,7 +185,7 @@ class WhisperFactory:
                             model = WhisperModel(**model_kwargs)
                             self._instances[cache_key] = model
                             self.logger.info(
-                                f"Successfully created fallback model: {cache_key}",
+                                "Successfully created fallback model: %s", cache_key,
                             )
                         else:
                             model = self._instances[cache_key]
@@ -193,14 +198,16 @@ class WhisperFactory:
             return FasterWhisperInference(model, config)
 
         except Exception as e:
-            self.logger.exception(f"Error creating Whisper inference: {e}")
+            self.logger.exception("Error creating Whisper inference")
             msg = f"Failed to create Whisper inference: {e}"
             raise ModelError(msg)
 
 
 class FasterWhisperInference:
     """Wrapper class for faster-whisper model with optimized inference settings.
+
     Provides transcription functionality with performance optimizations.
+
     """
 
     def __init__(self, model: WhisperModel, config: WhisperConfig) -> None:
@@ -313,14 +320,16 @@ class FasterWhisperInference:
             }
 
             self.logger.info(
-                f"Transcription completed: {len(segments_list)} segments, "
-                f"{total_duration:.2f}s duration, language: {info.language}",
+                "Transcription completed: %d segments, %.2fs duration, language: %s",
+                len(segments_list),
+                total_duration,
+                info.language,
             )
 
             return result
 
         except Exception as e:
-            self.logger.exception(f"Transcription failed for {audio_path}: {e}")
+            self.logger.exception("Transcription failed for %s", audio_path)
             from src.utils.error_handling import AudioProcessingError
 
             msg = f"Transcription failed: {e}"
@@ -361,14 +370,15 @@ class FasterWhisperInference:
             }
 
             self.logger.debug(
-                f"Language detected: {info.language} "
-                f"(confidence: {info.language_probability:.3f})",
+                "Language detected: %s (confidence: %.3f)",
+                info.language,
+                info.language_probability,
             )
 
             return result
 
         except Exception as e:
-            self.logger.exception(f"Language detection failed for {audio_path}: {e}")
+            self.logger.exception("Language detection failed for %s", audio_path)
             from src.utils.error_handling import AudioProcessingError
 
             msg = f"Language detection failed: {e}"

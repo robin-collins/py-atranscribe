@@ -99,8 +99,8 @@ class BatchTranscriber:
 
             self.logger.info("Transcription pipeline initialized successfully")
 
-        except Exception as e:
-            self.logger.exception(f"Failed to initialize transcription pipeline: {e}")
+        except Exception:
+            self.logger.exception("Failed to initialize transcription pipeline")
             raise
 
     @retry_on_error()
@@ -131,7 +131,7 @@ class BatchTranscriber:
                 )
                 try:
                     progress_callback(progress_info)
-                except Exception as e:
+                except Exception as e:  # BLE001: Broad except required to handle arbitrary callback errors
                     self.logger.warning("Error in progress callback: %s", e)
 
         try:
@@ -223,7 +223,7 @@ class BatchTranscriber:
             )
 
             self.logger.info(
-                f"Successfully processed {file_path} in {processing_time:.2f}s",
+                "Successfully processed %s in %.2fs", file_path, processing_time,
             )
 
             return ProcessingResult(
@@ -243,11 +243,11 @@ class BatchTranscriber:
                 },
             )
 
-        except Exception as e:
+        except Exception as e:  # BLE001: Broad except required to catch all pipeline errors
             processing_time = time.time() - start_time
             error_message = str(e)
 
-            self.logger.exception(f"Failed to process {file_path}: {error_message}")
+            self.logger.exception("Failed to process %s: %s", file_path, error_message)
 
             # Update error statistics
             self._processing_stats["files_failed"] += 1
@@ -277,9 +277,9 @@ class BatchTranscriber:
 
 
         except Exception as e:
-            self.logger.exception(f"Transcription failed for {file_path}: {e}")
+            self.logger.exception("Transcription failed for %s", file_path)
             msg = f"Transcription failed: {e}"
-            raise AudioProcessingError(msg, str(file_path))
+            raise AudioProcessingError(msg, str(file_path)) from e
 
     async def _perform_diarization(self, file_path: Path) -> DiarizationResult | None:
         """Perform speaker diarization."""
@@ -296,7 +296,7 @@ class BatchTranscriber:
 
         except Exception as e:
             self.logger.warning(
-                f"Diarization failed for {file_path}, continuing without speaker labels: {e}",
+                "Diarization failed for %s, continuing without speaker labels: %s", file_path, e,
             )
             # Don't raise exception for diarization failures, continue without speaker labels
             return None
@@ -354,9 +354,9 @@ class BatchTranscriber:
 
 
         except Exception as e:
-            self.logger.exception(f"Failed to generate outputs for {input_path}: {e}")
+            self.logger.exception("Failed to generate outputs for %s", input_path)
             msg = f"Failed to generate outputs: {e}"
-            raise FileSystemError(msg, str(input_path))
+            raise FileSystemError(msg, str(input_path)) from e
 
     async def _post_process_file(self, file_path: Path) -> None:
         """Perform post-processing on the input file."""
@@ -399,8 +399,8 @@ class BatchTranscriber:
             else:
                 self.logger.warning("Unknown post-processing action: %s", action)
 
-        except Exception as e:
-            self.logger.exception(f"Post-processing failed for {file_path}: {e}")
+        except Exception:
+            self.logger.exception("Post-processing failed for %s", file_path)
             # Don't raise exception for post-processing failures
 
     def _get_diarization_info(
@@ -471,8 +471,8 @@ class BatchTranscriber:
 
             self.logger.info("Batch transcriber cleanup completed")
 
-        except Exception as e:
-            self.logger.exception(f"Error during cleanup: {e}")
+        except Exception:
+            self.logger.exception("Error during cleanup")
 
     def __del__(self) -> None:
         """Destructor to ensure cleanup."""
@@ -482,5 +482,5 @@ class BatchTranscriber:
                 WhisperFactory.clear_cache()
             if hasattr(self, "diarizer"):
                 Diarizer.clear_cache()
-        except Exception:
+        except Exception:  # BLE001: Broad except required to ignore all destructor errors
             pass  # Ignore errors during destruction

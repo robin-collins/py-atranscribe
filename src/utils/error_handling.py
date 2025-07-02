@@ -1,10 +1,11 @@
 """Comprehensive error handling and retry mechanisms for the transcription application.
+
 Provides automatic retry logic, graceful degradation, and error classification.
+
 """
 
 import asyncio
 import logging
-import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ class TranscriptionError(Exception):
         message: str,
         category: ErrorCategory = ErrorCategory.UNKNOWN,
         severity: ErrorSeverity = ErrorSeverity.MEDIUM,
+        *,
         recoverable: bool = True,
     ) -> None:
         super().__init__(message)
@@ -72,6 +74,7 @@ class FileSystemError(TranscriptionError):
     """File system related errors."""
 
     def __init__(self, message: str, path: str | None = None) -> None:
+        """Initialize FileSystemError."""
         super().__init__(message, ErrorCategory.FILE_SYSTEM, ErrorSeverity.HIGH)
         self.path = path
 
@@ -85,14 +88,20 @@ class ModelError(TranscriptionError):
         model_name: str | None = None,
         severity: ErrorSeverity = ErrorSeverity.HIGH,
     ) -> None:
+        """Initialize ModelError."""
         super().__init__(message, ErrorCategory.MODEL, severity)
         self.model_name = model_name
 
 
-class MemoryError(TranscriptionError):
+class TranscriptionMemoryError(TranscriptionError):
     """Memory-related errors."""
 
-    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.HIGH) -> None:
+    def __init__(
+        self,
+        message: str,
+        severity: ErrorSeverity = ErrorSeverity.HIGH,
+    ) -> None:
+        """Initialize MemoryError."""
         super().__init__(message, ErrorCategory.MEMORY, severity)
 
 
@@ -100,6 +109,7 @@ class AudioProcessingError(TranscriptionError):
     """Audio processing errors."""
 
     def __init__(self, message: str, file_path: str | None = None) -> None:
+        """Initialize AudioProcessingError."""
         super().__init__(message, ErrorCategory.AUDIO, ErrorSeverity.MEDIUM)
         self.file_path = file_path
 
@@ -107,7 +117,12 @@ class AudioProcessingError(TranscriptionError):
 class GPUError(TranscriptionError):
     """GPU-related errors."""
 
-    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.HIGH) -> None:
+    def __init__(
+        self,
+        message: str,
+        severity: ErrorSeverity = ErrorSeverity.HIGH,
+    ) -> None:
+        """Initialize GPUError."""
         super().__init__(message, ErrorCategory.GPU, severity)
 
 
@@ -120,6 +135,7 @@ class RetryConfig:
         base_delay: float = 1.0,
         max_delay: float = 60.0,
         exponential_base: float = 2.0,
+        *,
         jitter: bool = True,
         retryable_exceptions: list[type[Exception]] | None = None,
     ) -> None:
@@ -146,7 +162,7 @@ class RetryConfig:
                 TimeoutError,
                 FileSystemError,
                 ModelError,
-                MemoryError,
+                TranscriptionMemoryError,
                 GPUError,
                 OSError,
                 IOError,
@@ -161,8 +177,9 @@ class RetryConfig:
 
         if self.jitter:
             # Add random jitter (±25% of delay)
+            import secrets
             jitter_amount = delay * 0.25
-            delay += random.uniform(-jitter_amount, jitter_amount)
+            delay += secrets.SystemRandom().uniform(-jitter_amount, jitter_amount)
 
         return max(0, delay)
 
@@ -209,7 +226,9 @@ class ErrorTracker:
 
         # Log the error
         self.logger.error(
-            f"Error recorded: {error_info.category.value} - {error_info.message}",
+            "Error recorded: %s - %s",
+            error_info.category.value,
+            error_info.message,
             extra={
                 "error_category": error_info.category.value,
                 "error_severity": error_info.severity.value,
@@ -221,8 +240,9 @@ class ErrorTracker:
     def get_error_stats(self) -> dict[str, Any]:
         """Get error statistics."""
         total_errors = len(self.errors)
+        one_hour_seconds = 3600
         recent_errors = [
-            e for e in self.errors if time.time() - e.timestamp < 3600
+            e for e in self.errors if time.time() - e.timestamp < one_hour_seconds
         ]  # Last hour
 
         return {
@@ -264,7 +284,7 @@ def classify_error(exception: Exception) -> ErrorInfo:
     elif isinstance(exception, ConnectionError | TimeoutError):
         category = ErrorCategory.NETWORK
         severity = ErrorSeverity.MEDIUM
-    elif isinstance(exception, MemoryError) or "memory" in str(exception).lower():
+    elif isinstance(exception, TranscriptionMemoryError) or "memory" in str(exception).lower():
         category = ErrorCategory.MEMORY
         severity = ErrorSeverity.HIGH
     elif "cuda" in str(exception).lower() or "gpu" in str(exception).lower():
@@ -298,8 +318,8 @@ def classify_error(exception: Exception) -> ErrorInfo:
     )
 
 
-def retry_on_error(config: RetryConfig | None = None):
-    """Decorator for automatic retry on errors.
+def retry_on_error(config: RetryConfig | None = None) -> Callable:
+    """Return a decorator that automatically retries on errors.
 
     Args:
         config: Retry configuration. If None, uses default configuration.
@@ -310,7 +330,7 @@ def retry_on_error(config: RetryConfig | None = None):
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
-        def sync_wrapper(*args, **kwargs) -> T:
+        def sync_wrapper(*args: Any, **kwargs: Any) -> T:
             last_exception = None
 
             for attempt in range(1, config.max_attempts + 1):
@@ -328,7 +348,7 @@ def retry_on_error(config: RetryConfig | None = None):
                     if attempt < config.max_attempts:
                         delay = config.calculate_delay(attempt)
                         logging.getLogger(__name__).warning(
-                            f"Attempt {attempt} failed, retrying in {delay:.2f}s: {e}",
+                            "Attempt %d failed, retrying in %.2fs: %s", attempt, delay, e,
                         )
                         time.sleep(delay)
                     else:
@@ -338,7 +358,7 @@ def retry_on_error(config: RetryConfig | None = None):
             raise last_exception
 
         @wraps(func)
-        async def async_wrapper(*args, **kwargs) -> T:
+        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
             last_exception = None
 
             for attempt in range(1, config.max_attempts + 1):
@@ -356,7 +376,7 @@ def retry_on_error(config: RetryConfig | None = None):
                     if attempt < config.max_attempts:
                         delay = config.calculate_delay(attempt)
                         logging.getLogger(__name__).warning(
-                            f"Attempt {attempt} failed, retrying in {delay:.2f}s: {e}",
+                            "Attempt %d failed, retrying in %.2fs: %s", attempt, delay, e,
                         )
                         await asyncio.sleep(delay)
                     else:
@@ -375,6 +395,7 @@ def retry_on_error(config: RetryConfig | None = None):
 
 class CircuitBreaker:
     """Circuit breaker pattern implementation for handling repeated failures.
+
     Prevents cascading failures by temporarily disabling failing operations.
     """
 
@@ -401,7 +422,7 @@ class CircuitBreaker:
         self.state = "closed"  # closed, open, half-open
         self.logger = logging.getLogger(__name__)
 
-    def call(self, func: Callable[..., T], *args, **kwargs) -> T:
+    def call(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         """Call a function through the circuit breaker.
 
         Args:
@@ -422,7 +443,7 @@ class CircuitBreaker:
                 self.logger.info("Circuit breaker moving to half-open state")
             else:
                 msg = "Circuit breaker is open"
-                raise Exception(msg)
+                raise RuntimeError(msg)
 
         try:
             result = func(*args, **kwargs)
@@ -447,16 +468,18 @@ class CircuitBreaker:
         if self.failure_count >= self.failure_threshold:
             self.state = "open"
             self.logger.warning(
-                f"Circuit breaker opened after {self.failure_count} failures",
+                "Circuit breaker opened after %d failures", self.failure_count,
             )
 
 
 class GracefulDegradation:
     """Handles graceful degradation of functionality when resources are constrained.
+
     Provides fallback mechanisms for model loading and processing.
     """
 
     def __init__(self) -> None:
+        """Initialize GracefulDegradation."""
         self.degradation_level = 0  # 0 = full functionality, higher = more degraded
         self.logger = logging.getLogger(__name__)
 
@@ -486,7 +509,7 @@ class GracefulDegradation:
         fallback_model = fallbacks[fallback_index]
         if fallback_model != requested_model:
             self.logger.warning(
-                f"Using fallback model {fallback_model} instead of {requested_model}",
+                "Using fallback model %s instead of %s", fallback_model, requested_model,
             )
 
         return fallback_model
@@ -513,7 +536,7 @@ class GracefulDegradation:
         fallback_type = fallbacks[fallback_index]
         if fallback_type != requested_type:
             self.logger.warning(
-                f"Using fallback compute type {fallback_type} instead of {requested_type}",
+                "Using fallback compute type %s instead of %s", fallback_type, requested_type,
             )
 
         return fallback_type
@@ -539,7 +562,7 @@ class GracefulDegradation:
 
         if should_disable:
             self.logger.warning(
-                f"Disabling feature '{feature}' due to resource constraints",
+                "Disabling feature '%s' due to resource constraints", feature,
             )
 
         return should_disable

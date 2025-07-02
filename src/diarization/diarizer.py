@@ -1,27 +1,25 @@
 """Speaker diarization using pyannote.audio for identifying and labeling speakers in audio.
+
 Provides integration with transcription pipeline for speaker-labeled transcripts.
 """
-
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 
 try:
     import torchaudio
     from pyannote.audio import Pipeline
-    from pyannote.core import Annotation, Segment
+    from pyannote.core import Annotation
 except ImportError as e:
-    logging.getLogger(__name__).exception(f"Failed to import pyannote.audio: {e}")
+    logging.getLogger(__name__).exception("Failed to import pyannote.audio")
     msg = (
         "pyannote.audio is required for speaker diarization. "
         "Install with: pip install pyannote.audio"
     )
-    raise ImportError(
-        msg,
-    )
+    raise ImportError(msg) from e
 
 from src.config import DiarizationConfig
 from src.utils.error_handling import ModelError, graceful_degradation, retry_on_error
@@ -49,12 +47,14 @@ class DiarizationResult:
     confidence: float
 
 
+
 class Diarizer:
     """Speaker diarization class using pyannote.audio.
+
     Identifies and labels different speakers in audio files.
     """
 
-    _pipeline_cache: dict[str, Pipeline] = {}
+    _pipeline_cache: ClassVar[dict[str, Pipeline]] = {}
 
     def __init__(self, config: DiarizationConfig) -> None:
         """Initialize Diarizer with configuration.
@@ -118,14 +118,14 @@ class Diarizer:
             self.logger.info("Diarization pipeline initialized successfully")
 
         except Exception as e:
-            self.logger.exception(f"Failed to initialize diarization pipeline: {e}")
+            self.logger.exception("Failed to initialize diarization pipeline")
             if "unauthorized" in str(e).lower() or "authentication" in str(e).lower():
                 msg = f"HuggingFace authentication failed. Please check HF_TOKEN: {e}"
                 raise ModelError(
                     msg,
-                )
+                ) from e
             msg = f"Failed to initialize diarization pipeline: {e}"
-            raise ModelError(msg)
+            raise ModelError(msg) from e
 
     def _get_optimal_device(self) -> str:
         """Determine optimal device for diarization."""
@@ -148,10 +148,11 @@ class Diarizer:
                         "Insufficient GPU memory for diarization, using CPU",
                     )
                     return "cpu"
-                except Exception as e:
+                except Exception as e:  # BLE001: Broad except required to handle unexpected GPU check errors
                     self.logger.warning("Error checking GPU for diarization: %s", e)
                     return "cpu"
-            return "cpu"
+            else:
+                return "cpu"
         return self.config.device
 
     @retry_on_error()
@@ -207,16 +208,17 @@ class Diarizer:
             )
 
             self.logger.info(
-                f"Diarization completed: {len(speakers)} speakers detected, "
-                f"{len(segments)} segments",
+                "Diarization completed: %d speakers detected, %d segments",
+                len(speakers),
+                len(segments),
             )
 
             return result
 
         except Exception as e:
-            self.logger.exception(f"Diarization failed for {audio_path}: {e}")
+            self.logger.exception("Diarization failed for %s", audio_path)
             msg = f"Diarization failed: {e}"
-            raise ModelError(msg)
+            raise ModelError(msg) from e
 
     def _extract_speakers(
         self, diarization: Annotation, total_duration: float,
@@ -398,7 +400,7 @@ class Diarizer:
             labeled_segments.append(labeled_segment)
 
         self.logger.debug(
-            f"Assigned speakers to {len(labeled_segments)} transcription segments",
+            "Assigned speakers to %d transcription segments", len(labeled_segments),
         )
         return labeled_segments
 

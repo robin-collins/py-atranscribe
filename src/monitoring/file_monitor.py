@@ -1,7 +1,8 @@
 """File monitoring system for detecting new audio files for transcription.
-Uses watchdog for efficient file system monitoring with stability detection.
-"""
 
+Uses watchdog for efficient file system monitoring with stability detection.
+
+"""
 import asyncio
 import contextlib
 import logging
@@ -10,10 +11,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+FILE_STABILITY_TIME_THRESHOLD = 0.1
+
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from src.config import AppConfig
+
 
 
 @dataclass
@@ -30,7 +34,9 @@ class FileInfo:
 
 class FileStabilityTracker:
     """Tracks file stability to ensure files are completely written before processing.
+
     Uses size and modification time to detect when files have stopped changing.
+
     """
 
     def __init__(self, stability_delay: float = 5.0) -> None:
@@ -83,7 +89,7 @@ class FileStabilityTracker:
             # Check if file has changed
             if (
                 current_size != file_info.size
-                or abs(current_mtime - file_info.modified_time) > 0.1
+                or abs(current_mtime - file_info.modified_time) > FILE_STABILITY_TIME_THRESHOLD
             ):
                 # File has changed, reset stability tracking
                 file_info.size = current_size
@@ -98,14 +104,13 @@ class FileStabilityTracker:
                 self.logger.debug("File stabilizing: %s", file_path)
                 return False
 
-            # Check if file has been stable long enough
+            # Check if file has been stable long enough and not processed
             stable_duration = current_time - file_info.stable_since
-            if stable_duration >= self.stability_delay:
-                if not file_info.processed:
-                    self.logger.info(
-                        f"File stable and ready: {file_path} (size: {current_size})",
-                    )
-                    return True
+            if stable_duration >= self.stability_delay and not file_info.processed:
+                self.logger.info(
+                    "File stable and ready: %s (size: %s)", file_path, current_size
+                )
+                return True
 
             return False
 
@@ -251,7 +256,9 @@ class AudioFileHandler(FileSystemEventHandler):
 
 class FileMonitor:
     """Main file monitoring class that watches for new audio files.
+
     Implements efficient file system monitoring with stability detection.
+
     """
 
     def __init__(
@@ -399,7 +406,9 @@ class FileMonitor:
 
 class ProcessingQueue:
     """Thread-safe queue for managing files to be processed.
+
     Provides deduplication and priority handling.
+
     """
 
     def __init__(self, max_size: int = 1000) -> None:

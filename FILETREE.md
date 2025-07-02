@@ -139,12 +139,12 @@ reference/                             # Reference implementation (not tracked i
 ### Processing Modules
 
 - **src/transcription/whisper_factory.py**: Factory pattern for Whisper model management
-- **src/diarization/diarizer.py**: Speaker diarization using pyannote.audio
+- **src/diarization/diarizer.py**: Speaker diarization using pyannote.audio (now Ruff-compliant: docstrings, exception handling, structure)
 - **src/output/subtitle_manager.py**: Multi-format output generation (SRT, WebVTT, etc.)
 
 ### Monitoring and Infrastructure
 
-- **src/monitoring/file_monitor.py**: Watchdog-based file system monitoring
+- **src/monitoring/file_monitor.py**: Watchdog-based file system monitoring (now Ruff-compliant: structure, magic values, logging)
 - **src/monitoring/health_check.py**: FastAPI health check endpoints
 - **src/utils/error_handling.py**: Comprehensive error handling and retry mechanisms
 

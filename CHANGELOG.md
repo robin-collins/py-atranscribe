@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Linting & Code Quality Improvements**
+  - Refactored `src/diarization/diarizer.py` to fix docstring formatting (D205), justify broad exception usage (BLE001), and improve structure for Ruff compliance.
+  - Refactored `src/monitoring/file_monitor.py` to address nested ifs (SIM102), magic values (PLR2004), and logging best practices (G004).
+  - Introduced `FILE_STABILITY_TIME_THRESHOLD` constant to replace magic value in file stability checks.
+  - Combined nested conditions for file stability and removed f-strings from logger calls.
+  - Improved maintainability and reduced Ruff error count in both modules.
+
 - **File Processing Logic Enhancement**
   - Modified file monitoring system to exclude the most recent audio file from processing unless it's older than 24 hours
   - Updated `FileStabilityTracker.get_pending_files()` method in `src/monitoring/file_monitor.py`

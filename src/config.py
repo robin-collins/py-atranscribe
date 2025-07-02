@@ -1,13 +1,13 @@
 """Configuration management for the automated transcription application.
 
-Handles loading and validation of configuration from YAML files and environment variables.
+Handles loading and validation of configuration from YAML files and environment
+variables.
 """
 
 import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -24,15 +24,16 @@ class DirectoriesConfig(BaseModel):
         default=Path("/data/out"), description="Output directory for transcripts",
     )
     backup: Path = Field(
-        default=Path("/data/backup"), description="Backup directory for processed files",
+        default=Path("/data/backup"),
+        description="Backup directory for processed files",
     )
     temp: Path = Field(
-        default=Path(os.path.join(tempfile.gettempdir(), "transcribe")),
+        default=Path(tempfile.gettempdir()) / "transcribe",
         description="Temporary directory for processing",
     )
 
 
-class MonitoringConfig(BaseModel):
+class FileMonitoringConfig(BaseModel):
     """File monitoring configuration."""
 
     supported_formats: list[str] = Field(
@@ -88,7 +89,8 @@ class WhisperConfig(BaseModel):
         default="auto", description="Device for inference (auto, cpu, cuda)",
     )
     compute_type: str = Field(
-        default="auto", description="Compute type (auto, int8, int16, float16, float32)",
+        default="auto",
+        description="Compute type (auto, int8, int16, float16, float32)",
     )
     cpu_threads: int = Field(
         default=0, ge=0, description="Number of CPU threads (0 = auto)",
@@ -109,7 +111,7 @@ class WhisperConfig(BaseModel):
             "large-v3",
         ]
         if v not in valid_sizes:
-            msg = "model_size must be one of {}".format(valid_sizes)
+            msg = f"model_size must be one of {valid_sizes}"
             raise ValueError(msg)
         return v
 
@@ -119,7 +121,7 @@ class WhisperConfig(BaseModel):
         """Validate the device."""
         valid_devices = ["auto", "cpu", "cuda"]
         if v not in valid_devices:
-            msg = "device must be one of {}".format(valid_devices)
+            msg = f"device must be one of {valid_devices}"
             raise ValueError(msg)
         return v
 
@@ -147,7 +149,8 @@ class TranscriptionConfig(BaseModel):
     whisper: WhisperConfig = Field(default_factory=WhisperConfig)
     preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
     language: str = Field(
-        default="auto", description="Language for transcription (auto or language code)",
+        default="auto",
+        description="Language for transcription (auto or language code)",
     )
     output_formats: list[str] = Field(
         default=["srt", "webvtt", "txt", "json", "tsv", "lrc"],
@@ -232,7 +235,7 @@ class PostProcessingConfig(BaseModel):
         """Validate the post-processing action."""
         valid_actions = ["move", "delete", "keep"]
         if v not in valid_actions:
-            msg = "action must be one of {}".format(valid_actions)
+            msg = f"action must be one of {valid_actions}"
             raise ValueError(msg)
         return v
 
@@ -242,7 +245,7 @@ class PostProcessingConfig(BaseModel):
         """Validate the backup structure."""
         valid_structures = ["flat", "date", "original"]
         if v not in valid_structures:
-            msg = "backup_structure must be one of {}".format(valid_structures)
+            msg = f"backup_structure must be one of {valid_structures}"
             raise ValueError(msg)
         return v
 
@@ -265,7 +268,7 @@ class LoggingConfig(BaseModel):
         """Validate the logging level."""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         if v.upper() not in valid_levels:
-            msg = "level must be one of {}".format(valid_levels)
+            msg = f"level must be one of {valid_levels}"
             raise ValueError(msg)
         return v.upper()
 
@@ -275,7 +278,7 @@ class HealthCheckConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable health check endpoint")
     port: int = Field(default=8000, ge=1, le=65535, description="Health check port")
-    host: str = Field(default="0.0.0.0", description="Health check host")
+    host: str = Field(default="127.0.0.1", description="Health check host")
     disk_space_min_gb: float = Field(
         default=1.0, ge=0, description="Minimum disk space threshold",
     )
@@ -312,7 +315,7 @@ class AppConfig(BaseSettings):
     )
 
     directories: DirectoriesConfig = Field(default_factory=DirectoriesConfig)
-    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    monitoring: FileMonitoringConfig = Field(default_factory=FileMonitoringConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     diarization: DiarizationConfig = Field(default_factory=DiarizationConfig)
     post_processing: PostProcessingConfig = Field(default_factory=PostProcessingConfig)
@@ -321,7 +324,7 @@ class AppConfig(BaseSettings):
     health_check: HealthCheckConfig = Field(default_factory=HealthCheckConfig)
 
 
-def expand_environment_variables(value: Any) -> Any:
+def expand_environment_variables(value: str | dict | list) -> str | dict | list:
     """Recursively expand environment variables in configuration values.
 
     Supports ${VAR_NAME} and ${VAR_NAME:-default_value} syntax.
@@ -330,7 +333,7 @@ def expand_environment_variables(value: Any) -> Any:
         # Pattern to match ${VAR_NAME} or ${VAR_NAME:-default}
         pattern = r"\$\{([^}:]+)(?::-(.*?))?\}"
 
-        def replace_var(match):
+        def replace_var(match: re.Match) -> str:
             var_name = match.group(1)
             default_value = match.group(2) if match.group(2) is not None else ""
             return os.getenv(var_name, default_value)
@@ -369,13 +372,11 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     config_data = {}
     if config_path.exists():
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with config_path.open(encoding="utf-8") as f:
                 config_data = yaml.safe_load(f) or {}
         except yaml.YAMLError as e:
-            msg = "Invalid YAML in configuration file {}: {}".format(config_path, e)
-            raise yaml.YAMLError(
-                msg,
-            )
+            msg = f"Invalid YAML in configuration file {config_path}: {e}"
+            raise yaml.YAMLError(msg) from e
 
     # Expand environment variables in loaded data
     config_data = expand_environment_variables(config_data)
@@ -383,9 +384,9 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     # Create configuration object with environment variable overrides
     try:
         config = AppConfig(**config_data)
-    except Exception as e:
-        msg = "Configuration validation failed: {}".format(e)
-        raise ValueError(msg)
+    except (TypeError, ValueError) as e:
+        msg = f"Configuration validation failed: {e}"
+        raise ValueError(msg) from e
 
     return config
 
@@ -413,7 +414,7 @@ def create_directories(config: AppConfig) -> None:
             directory.mkdir(parents=True, exist_ok=True)
         except (PermissionError, OSError) as e:
             msg = f"Failed to create directory {directory}: {e}"
-            raise OSError(msg)
+            raise OSError(msg) from e
 
 
 def validate_config(config: AppConfig) -> list[str]:
@@ -448,13 +449,15 @@ def validate_config(config: AppConfig) -> list[str]:
             )
 
     # Check memory settings
-    if config.performance.max_memory_usage_gb < 2.0:
+    min_memory_gb = 2.0
+    if config.performance.max_memory_usage_gb < min_memory_gb:
         warnings.append(
             "max_memory_usage_gb is set below 2GB, this may cause processing failures",
         )
 
     # Check concurrent processing settings
-    if config.performance.max_concurrent_files > 4:
+    max_concurrent_files = 4
+    if config.performance.max_concurrent_files > max_concurrent_files:
         warnings.append(
             "max_concurrent_files is set above 4, this may cause resource exhaustion",
         )
