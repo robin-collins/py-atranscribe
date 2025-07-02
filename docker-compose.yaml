@@ -45,7 +45,7 @@ services:
 
     # Volume mounts
     volumes:
-      - ./audio/input:/data/in
+      - /mnt/shared/raspi-audio:/data/in
       - ./audio/output:/data/out
       - ./audio/backup:/data/backup
       - transcribe-cache:/home/transcribe/.cache

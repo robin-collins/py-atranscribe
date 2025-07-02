@@ -1,13 +1,11 @@
-"""
-Speaker diarization using pyannote.audio for identifying and labeling speakers in audio.
+"""Speaker diarization using pyannote.audio for identifying and labeling speakers in audio.
 Provides integration with transcription pipeline for speaker-labeled transcripts.
 """
 
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 
@@ -16,14 +14,17 @@ try:
     from pyannote.audio import Pipeline
     from pyannote.core import Annotation, Segment
 except ImportError as e:
-    logging.getLogger(__name__).error(f"Failed to import pyannote.audio: {e}")
-    raise ImportError(
+    logging.getLogger(__name__).exception(f"Failed to import pyannote.audio: {e}")
+    msg = (
         "pyannote.audio is required for speaker diarization. "
         "Install with: pip install pyannote.audio"
     )
+    raise ImportError(
+        msg,
+    )
 
-from ..config import DiarizationConfig
-from ..utils.error_handling import ModelError, graceful_degradation, retry_on_error
+from src.config import DiarizationConfig
+from src.utils.error_handling import ModelError, graceful_degradation, retry_on_error
 
 
 @dataclass
@@ -49,22 +50,21 @@ class DiarizationResult:
 
 
 class Diarizer:
-    """
-    Speaker diarization class using pyannote.audio.
+    """Speaker diarization class using pyannote.audio.
     Identifies and labels different speakers in audio files.
     """
 
     _pipeline_cache: dict[str, Pipeline] = {}
 
-    def __init__(self, config: DiarizationConfig):
-        """
-        Initialize Diarizer with configuration.
+    def __init__(self, config: DiarizationConfig) -> None:
+        """Initialize Diarizer with configuration.
 
         Args:
             config: Diarization configuration
 
         Raises:
             ModelError: If initialization fails
+
         """
         self.config = config
         self.logger = logging.getLogger(__name__)
@@ -93,10 +93,10 @@ class Diarizer:
 
             if cache_key in self._pipeline_cache:
                 self.pipeline = self._pipeline_cache[cache_key]
-                self.logger.debug(f"Using cached diarization pipeline: {cache_key}")
+                self.logger.debug("Using cached diarization pipeline: %s", cache_key)
                 return
 
-            self.logger.info(f"Initializing diarization pipeline: {self.config.model}")
+            self.logger.info("Initializing diarization pipeline: %s", self.config.model)
 
             # Load the diarization pipeline
             self.pipeline = Pipeline.from_pretrained(
@@ -118,12 +118,14 @@ class Diarizer:
             self.logger.info("Diarization pipeline initialized successfully")
 
         except Exception as e:
-            self.logger.error(f"Failed to initialize diarization pipeline: {e}")
+            self.logger.exception(f"Failed to initialize diarization pipeline: {e}")
             if "unauthorized" in str(e).lower() or "authentication" in str(e).lower():
+                msg = f"HuggingFace authentication failed. Please check HF_TOKEN: {e}"
                 raise ModelError(
-                    f"HuggingFace authentication failed. Please check HF_TOKEN: {e}"
+                    msg,
                 )
-            raise ModelError(f"Failed to initialize diarization pipeline: {e}")
+            msg = f"Failed to initialize diarization pipeline: {e}"
+            raise ModelError(msg)
 
     def _get_optimal_device(self) -> str:
         """Determine optimal device for diarization."""
@@ -138,25 +140,23 @@ class Diarizer:
                     if (
                         gpu_memory_gb >= 1.0
                         and not graceful_degradation.should_disable_feature(
-                            "diarization"
+                            "diarization",
                         )
                     ):
                         return "cuda"
-                    else:
-                        self.logger.warning(
-                            "Insufficient GPU memory for diarization, using CPU"
-                        )
-                        return "cpu"
+                    self.logger.warning(
+                        "Insufficient GPU memory for diarization, using CPU",
+                    )
+                    return "cpu"
                 except Exception as e:
-                    self.logger.warning(f"Error checking GPU for diarization: {e}")
+                    self.logger.warning("Error checking GPU for diarization: %s", e)
                     return "cpu"
             return "cpu"
         return self.config.device
 
     @retry_on_error()
     def diarize(self, audio_path: str) -> DiarizationResult:
-        """
-        Perform speaker diarization on audio file.
+        """Perform speaker diarization on audio file.
 
         Args:
             audio_path: Path to audio file
@@ -166,18 +166,20 @@ class Diarizer:
 
         Raises:
             ModelError: If diarization fails
+
         """
         if not self.config.enabled:
             # Return empty result if diarization is disabled
             return DiarizationResult(
-                speakers=[], segments=[], duration=0.0, num_speakers=0, confidence=0.0
+                speakers=[], segments=[], duration=0.0, num_speakers=0, confidence=0.0,
             )
 
         if self.pipeline is None:
-            raise ModelError("Diarization pipeline not initialized")
+            msg = "Diarization pipeline not initialized"
+            raise ModelError(msg)
 
         try:
-            self.logger.info(f"Starting speaker diarization: {audio_path}")
+            self.logger.info("Starting speaker diarization: %s", audio_path)
 
             # Get audio duration
             audio_info = torchaudio.info(audio_path)
@@ -206,20 +208,20 @@ class Diarizer:
 
             self.logger.info(
                 f"Diarization completed: {len(speakers)} speakers detected, "
-                f"{len(segments)} segments"
+                f"{len(segments)} segments",
             )
 
             return result
 
         except Exception as e:
-            self.logger.error(f"Diarization failed for {audio_path}: {e}")
-            raise ModelError(f"Diarization failed: {e}")
+            self.logger.exception(f"Diarization failed for {audio_path}: {e}")
+            msg = f"Diarization failed: {e}"
+            raise ModelError(msg)
 
     def _extract_speakers(
-        self, diarization: Annotation, total_duration: float
+        self, diarization: Annotation, total_duration: float,
     ) -> list[Speaker]:
-        """
-        Extract speaker information from diarization annotation.
+        """Extract speaker information from diarization annotation.
 
         Args:
             diarization: Pyannote diarization annotation
@@ -227,6 +229,7 @@ class Diarizer:
 
         Returns:
             List of detected speakers
+
         """
         speakers = {}
 
@@ -259,14 +262,14 @@ class Diarizer:
         return speaker_list
 
     def _create_segments(self, diarization: Annotation) -> list[dict[str, Any]]:
-        """
-        Create time-based segments with speaker labels.
+        """Create time-based segments with speaker labels.
 
         Args:
             diarization: Pyannote diarization annotation
 
         Returns:
             List of segments with speaker information
+
         """
         segments = []
 
@@ -288,19 +291,19 @@ class Diarizer:
     def _get_speaker_index(self, speaker_id: str, diarization: Annotation) -> int:
         """Get consistent speaker index for labeling."""
         unique_speakers = sorted(
-            set(str(label) for _, _, label in diarization.itertracks(yield_label=True))
+            {str(label) for _, _, label in diarization.itertracks(yield_label=True)},
         )
         return unique_speakers.index(speaker_id)
 
     def _calculate_confidence(self, diarization: Annotation) -> float:
-        """
-        Calculate overall confidence score for diarization.
+        """Calculate overall confidence score for diarization.
 
         Args:
             diarization: Pyannote diarization annotation
 
         Returns:
             Confidence score between 0 and 1
+
         """
         if len(diarization) == 0:
             return 0.0
@@ -335,8 +338,7 @@ class Diarizer:
         transcription_segments: list[dict[str, Any]],
         diarization_result: DiarizationResult,
     ) -> list[dict[str, Any]]:
-        """
-        Assign speaker labels to transcription segments based on overlap.
+        """Assign speaker labels to transcription segments based on overlap.
 
         Args:
             transcription_segments: Segments from transcription
@@ -344,6 +346,7 @@ class Diarizer:
 
         Returns:
             List of segments with speaker assignments
+
         """
         if not self.config.enabled or not diarization_result.segments:
             # Return segments without speaker labels if diarization is disabled
@@ -395,21 +398,21 @@ class Diarizer:
             labeled_segments.append(labeled_segment)
 
         self.logger.debug(
-            f"Assigned speakers to {len(labeled_segments)} transcription segments"
+            f"Assigned speakers to {len(labeled_segments)} transcription segments",
         )
         return labeled_segments
 
     def get_speaker_statistics(
-        self, diarization_result: DiarizationResult
+        self, diarization_result: DiarizationResult,
     ) -> dict[str, Any]:
-        """
-        Get statistics about detected speakers.
+        """Get statistics about detected speakers.
 
         Args:
             diarization_result: Diarization results
 
         Returns:
             Dictionary with speaker statistics
+
         """
         if not diarization_result.speakers:
             return {"num_speakers": 0, "total_speech_duration": 0.0, "speakers": []}

@@ -1,5 +1,4 @@
-"""
-Comprehensive error handling and retry mechanisms for the transcription application.
+"""Comprehensive error handling and retry mechanisms for the transcription application.
 Provides automatic retry logic, graceful degradation, and error classification.
 """
 
@@ -11,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from functools import wraps
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -62,7 +61,7 @@ class TranscriptionError(Exception):
         category: ErrorCategory = ErrorCategory.UNKNOWN,
         severity: ErrorSeverity = ErrorSeverity.MEDIUM,
         recoverable: bool = True,
-    ):
+    ) -> None:
         super().__init__(message)
         self.category = category
         self.severity = severity
@@ -72,7 +71,7 @@ class TranscriptionError(Exception):
 class FileSystemError(TranscriptionError):
     """File system related errors."""
 
-    def __init__(self, message: str, path: str | None = None):
+    def __init__(self, message: str, path: str | None = None) -> None:
         super().__init__(message, ErrorCategory.FILE_SYSTEM, ErrorSeverity.HIGH)
         self.path = path
 
@@ -85,7 +84,7 @@ class ModelError(TranscriptionError):
         message: str,
         model_name: str | None = None,
         severity: ErrorSeverity = ErrorSeverity.HIGH,
-    ):
+    ) -> None:
         super().__init__(message, ErrorCategory.MODEL, severity)
         self.model_name = model_name
 
@@ -93,14 +92,14 @@ class ModelError(TranscriptionError):
 class MemoryError(TranscriptionError):
     """Memory-related errors."""
 
-    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.HIGH):
+    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.HIGH) -> None:
         super().__init__(message, ErrorCategory.MEMORY, severity)
 
 
 class AudioProcessingError(TranscriptionError):
     """Audio processing errors."""
 
-    def __init__(self, message: str, file_path: str | None = None):
+    def __init__(self, message: str, file_path: str | None = None) -> None:
         super().__init__(message, ErrorCategory.AUDIO, ErrorSeverity.MEDIUM)
         self.file_path = file_path
 
@@ -108,7 +107,7 @@ class AudioProcessingError(TranscriptionError):
 class GPUError(TranscriptionError):
     """GPU-related errors."""
 
-    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.HIGH):
+    def __init__(self, message: str, severity: ErrorSeverity = ErrorSeverity.HIGH) -> None:
         super().__init__(message, ErrorCategory.GPU, severity)
 
 
@@ -123,9 +122,8 @@ class RetryConfig:
         exponential_base: float = 2.0,
         jitter: bool = True,
         retryable_exceptions: list[type[Exception]] | None = None,
-    ):
-        """
-        Initialize retry configuration.
+    ) -> None:
+        """Initialize retry configuration.
 
         Args:
             max_attempts: Maximum number of retry attempts
@@ -134,6 +132,7 @@ class RetryConfig:
             exponential_base: Base for exponential backoff
             jitter: Whether to add random jitter to delays
             retryable_exceptions: List of exception types that should trigger retries
+
         """
         self.max_attempts = max_attempts
         self.base_delay = base_delay
@@ -186,12 +185,12 @@ class RetryConfig:
 class ErrorTracker:
     """Tracks errors for monitoring and analysis."""
 
-    def __init__(self, max_errors: int = 1000):
-        """
-        Initialize error tracker.
+    def __init__(self, max_errors: int = 1000) -> None:
+        """Initialize error tracker.
 
         Args:
             max_errors: Maximum number of errors to keep in memory
+
         """
         self.max_errors = max_errors
         self.errors: list[ErrorInfo] = []
@@ -245,24 +244,24 @@ error_tracker = ErrorTracker()
 
 
 def classify_error(exception: Exception) -> ErrorInfo:
-    """
-    Classify an exception into error categories and create ErrorInfo.
+    """Classify an exception into error categories and create ErrorInfo.
 
     Args:
         exception: Exception to classify
 
     Returns:
         ErrorInfo: Classified error information
+
     """
     category = ErrorCategory.UNKNOWN
     severity = ErrorSeverity.MEDIUM
     recoverable = True
 
     # Classify based on exception type and message
-    if isinstance(exception, (FileNotFoundError, PermissionError, OSError, IOError)):
+    if isinstance(exception, FileNotFoundError | PermissionError | OSError | IOError):
         category = ErrorCategory.FILE_SYSTEM
         severity = ErrorSeverity.HIGH
-    elif isinstance(exception, (ConnectionError, TimeoutError)):
+    elif isinstance(exception, ConnectionError | TimeoutError):
         category = ErrorCategory.NETWORK
         severity = ErrorSeverity.MEDIUM
     elif isinstance(exception, MemoryError) or "memory" in str(exception).lower():
@@ -300,11 +299,11 @@ def classify_error(exception: Exception) -> ErrorInfo:
 
 
 def retry_on_error(config: RetryConfig | None = None):
-    """
-    Decorator for automatic retry on errors.
+    """Decorator for automatic retry on errors.
 
     Args:
         config: Retry configuration. If None, uses default configuration.
+
     """
     if config is None:
         config = RetryConfig()
@@ -324,12 +323,12 @@ def retry_on_error(config: RetryConfig | None = None):
 
                     if not config.should_retry(e, attempt):
                         error_tracker.record_error(error_info)
-                        raise e
+                        raise
 
                     if attempt < config.max_attempts:
                         delay = config.calculate_delay(attempt)
                         logging.getLogger(__name__).warning(
-                            f"Attempt {attempt} failed, retrying in {delay:.2f}s: {e}"
+                            f"Attempt {attempt} failed, retrying in {delay:.2f}s: {e}",
                         )
                         time.sleep(delay)
                     else:
@@ -352,12 +351,12 @@ def retry_on_error(config: RetryConfig | None = None):
 
                     if not config.should_retry(e, attempt):
                         error_tracker.record_error(error_info)
-                        raise e
+                        raise
 
                     if attempt < config.max_attempts:
                         delay = config.calculate_delay(attempt)
                         logging.getLogger(__name__).warning(
-                            f"Attempt {attempt} failed, retrying in {delay:.2f}s: {e}"
+                            f"Attempt {attempt} failed, retrying in {delay:.2f}s: {e}",
                         )
                         await asyncio.sleep(delay)
                     else:
@@ -369,15 +368,13 @@ def retry_on_error(config: RetryConfig | None = None):
         # Return appropriate wrapper based on function type
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
-        else:
-            return sync_wrapper
+        return sync_wrapper
 
     return decorator
 
 
 class CircuitBreaker:
-    """
-    Circuit breaker pattern implementation for handling repeated failures.
+    """Circuit breaker pattern implementation for handling repeated failures.
     Prevents cascading failures by temporarily disabling failing operations.
     """
 
@@ -386,14 +383,14 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         timeout: float = 60.0,
         expected_exception: type[Exception] = Exception,
-    ):
-        """
-        Initialize circuit breaker.
+    ) -> None:
+        """Initialize circuit breaker.
 
         Args:
             failure_threshold: Number of failures before opening circuit
             timeout: Time to wait before attempting to close circuit
             expected_exception: Exception type that triggers the circuit breaker
+
         """
         self.failure_threshold = failure_threshold
         self.timeout = timeout
@@ -405,8 +402,7 @@ class CircuitBreaker:
         self.logger = logging.getLogger(__name__)
 
     def call(self, func: Callable[..., T], *args, **kwargs) -> T:
-        """
-        Call a function through the circuit breaker.
+        """Call a function through the circuit breaker.
 
         Args:
             func: Function to call
@@ -418,21 +414,23 @@ class CircuitBreaker:
 
         Raises:
             Exception: If circuit is open or function fails
+
         """
         if self.state == "open":
             if time.time() - self.last_failure_time >= self.timeout:
                 self.state = "half-open"
                 self.logger.info("Circuit breaker moving to half-open state")
             else:
-                raise Exception("Circuit breaker is open")
+                msg = "Circuit breaker is open"
+                raise Exception(msg)
 
         try:
             result = func(*args, **kwargs)
             self._on_success()
             return result
-        except self.expected_exception as e:
+        except self.expected_exception:
             self._on_failure()
-            raise e
+            raise
 
     def _on_success(self) -> None:
         """Handle successful operation."""
@@ -449,29 +447,28 @@ class CircuitBreaker:
         if self.failure_count >= self.failure_threshold:
             self.state = "open"
             self.logger.warning(
-                f"Circuit breaker opened after {self.failure_count} failures"
+                f"Circuit breaker opened after {self.failure_count} failures",
             )
 
 
 class GracefulDegradation:
-    """
-    Handles graceful degradation of functionality when resources are constrained.
+    """Handles graceful degradation of functionality when resources are constrained.
     Provides fallback mechanisms for model loading and processing.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.degradation_level = 0  # 0 = full functionality, higher = more degraded
         self.logger = logging.getLogger(__name__)
 
     def get_model_fallback(self, requested_model: str) -> str:
-        """
-        Get a fallback model based on current degradation level.
+        """Get a fallback model based on current degradation level.
 
         Args:
             requested_model: Originally requested model
 
         Returns:
             str: Fallback model to use
+
         """
         model_hierarchy = {
             "large-v3": ["large-v2", "large-v1", "medium", "small", "base", "tiny"],
@@ -489,20 +486,20 @@ class GracefulDegradation:
         fallback_model = fallbacks[fallback_index]
         if fallback_model != requested_model:
             self.logger.warning(
-                f"Using fallback model {fallback_model} instead of {requested_model}"
+                f"Using fallback model {fallback_model} instead of {requested_model}",
             )
 
         return fallback_model
 
     def get_compute_type_fallback(self, requested_type: str) -> str:
-        """
-        Get a fallback compute type based on current degradation level.
+        """Get a fallback compute type based on current degradation level.
 
         Args:
             requested_type: Originally requested compute type
 
         Returns:
             str: Fallback compute type to use
+
         """
         type_hierarchy = {
             "float16": ["float32", "int8"],
@@ -516,20 +513,20 @@ class GracefulDegradation:
         fallback_type = fallbacks[fallback_index]
         if fallback_type != requested_type:
             self.logger.warning(
-                f"Using fallback compute type {fallback_type} instead of {requested_type}"
+                f"Using fallback compute type {fallback_type} instead of {requested_type}",
             )
 
         return fallback_type
 
     def should_disable_feature(self, feature: str) -> bool:
-        """
-        Determine if a feature should be disabled based on degradation level.
+        """Determine if a feature should be disabled based on degradation level.
 
         Args:
             feature: Feature name to check
 
         Returns:
             bool: True if feature should be disabled
+
         """
         feature_thresholds = {
             "bgm_separation": 1,
@@ -542,7 +539,7 @@ class GracefulDegradation:
 
         if should_disable:
             self.logger.warning(
-                f"Disabling feature '{feature}' due to resource constraints"
+                f"Disabling feature '{feature}' due to resource constraints",
             )
 
         return should_disable
@@ -550,7 +547,7 @@ class GracefulDegradation:
     def increase_degradation(self) -> None:
         """Increase degradation level due to resource constraints."""
         self.degradation_level += 1
-        self.logger.warning(f"Degradation level increased to {self.degradation_level}")
+        self.logger.warning("Degradation level increased to %s", self.degradation_level)
 
     def reset_degradation(self) -> None:
         """Reset degradation level when resources are available."""

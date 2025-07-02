@@ -1,31 +1,29 @@
-"""
-Factory for creating Whisper inference instances.
+"""Factory for creating Whisper inference instances.
 Provides centralized model management and configuration.
 """
 
+import contextlib
 import gc
 import logging
 import os
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 from faster_whisper import WhisperModel
 
-from ..config import WhisperConfig
-from ..utils.error_handling import ModelError, graceful_degradation, retry_on_error
+from src.config import WhisperConfig
+from src.utils.error_handling import ModelError, graceful_degradation, retry_on_error
 
 
 class WhisperFactory:
-    """
-    Factory class for creating and managing Whisper model instances.
+    """Factory class for creating and managing Whisper model instances.
     Implements model caching, device detection, and graceful degradation.
     """
 
     _instances: dict[str, WhisperModel] = {}
     _device_cache: str | None = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
 
     @classmethod
@@ -46,11 +44,11 @@ class WhisperFactory:
 
     @classmethod
     def get_optimal_device(cls) -> str:
-        """
-        Determine the optimal device for inference.
+        """Determine the optimal device for inference.
 
         Returns:
             str: Device string ("cuda", "cpu")
+
         """
         if cls._device_cache is not None:
             return cls._device_cache
@@ -65,16 +63,15 @@ class WhisperFactory:
                 if gpu_memory_gb >= 2.0:
                     cls._device_cache = "cuda"
                     logging.getLogger(__name__).info(
-                        f"Using CUDA device with {gpu_memory_gb:.1f}GB memory"
+                        f"Using CUDA device with {gpu_memory_gb:.1f}GB memory",
                     )
                     return "cuda"
-                else:
-                    logging.getLogger(__name__).warning(
-                        f"GPU has insufficient memory ({gpu_memory_gb:.1f}GB), using CPU"
-                    )
+                logging.getLogger(__name__).warning(
+                    f"GPU has insufficient memory ({gpu_memory_gb:.1f}GB), using CPU",
+                )
             except Exception as e:
                 logging.getLogger(__name__).warning(
-                    f"Error checking GPU memory, using CPU: {e}"
+                    f"Error checking GPU memory, using CPU: {e}",
                 )
 
         cls._device_cache = "cpu"
@@ -83,8 +80,7 @@ class WhisperFactory:
 
     @classmethod
     def get_optimal_compute_type(cls, device: str, requested_type: str = "auto") -> str:
-        """
-        Determine the optimal compute type for the given device.
+        """Determine the optimal compute type for the given device.
 
         Args:
             device: Target device ("cuda", "cpu")
@@ -92,6 +88,7 @@ class WhisperFactory:
 
         Returns:
             str: Optimal compute type
+
         """
         if requested_type != "auto":
             # Apply graceful degradation if needed
@@ -100,16 +97,14 @@ class WhisperFactory:
         if device == "cuda":
             # Use float16 for GPU to save memory
             return graceful_degradation.get_compute_type_fallback("float16")
-        else:
-            # Use int8 for CPU for better performance
-            return graceful_degradation.get_compute_type_fallback("int8")
+        # Use int8 for CPU for better performance
+        return graceful_degradation.get_compute_type_fallback("int8")
 
     @retry_on_error()
     def create_whisper_inference(
-        self, config: WhisperConfig
+        self, config: WhisperConfig,
     ) -> "FasterWhisperInference":
-        """
-        Create a FasterWhisperInference instance with the given configuration.
+        """Create a FasterWhisperInference instance with the given configuration.
 
         Args:
             config: Whisper configuration
@@ -119,6 +114,7 @@ class WhisperFactory:
 
         Raises:
             ModelError: If model creation fails
+
         """
         try:
             # Apply graceful degradation to model size
@@ -132,7 +128,7 @@ class WhisperFactory:
 
             # Determine compute type
             compute_type = WhisperFactory.get_optimal_compute_type(
-                device, config.compute_type
+                device, config.compute_type,
             )
 
             # Create cache key
@@ -140,10 +136,10 @@ class WhisperFactory:
 
             # Check if model is already cached
             if cache_key in self._instances:
-                self.logger.debug(f"Using cached Whisper model: {cache_key}")
+                self.logger.debug("Using cached Whisper model: %s", cache_key)
                 model = self._instances[cache_key]
             else:
-                self.logger.info(f"Creating new Whisper model: {cache_key}")
+                self.logger.info("Creating new Whisper model: %s", cache_key)
 
                 # Create model with optimal settings
                 model_kwargs = {
@@ -161,13 +157,13 @@ class WhisperFactory:
                     model_kwargs.update(
                         {
                             "device_index": 0,  # Use first GPU
-                        }
+                        },
                     )
 
                 try:
                     model = WhisperModel(**model_kwargs)
                     self._instances[cache_key] = model
-                    self.logger.info(f"Successfully created Whisper model: {cache_key}")
+                    self.logger.info("Successfully created Whisper model: %s", cache_key)
 
                 except Exception as e:
                     # Try fallback options on failure
@@ -184,35 +180,36 @@ class WhisperFactory:
                             model = WhisperModel(**model_kwargs)
                             self._instances[cache_key] = model
                             self.logger.info(
-                                f"Successfully created fallback model: {cache_key}"
+                                f"Successfully created fallback model: {cache_key}",
                             )
                         else:
                             model = self._instances[cache_key]
                     else:
+                        msg = f"Failed to create Whisper model: {e}"
                         raise ModelError(
-                            f"Failed to create Whisper model: {e}", model_size
+                            msg, model_size,
                         )
 
             return FasterWhisperInference(model, config)
 
         except Exception as e:
-            self.logger.error(f"Error creating Whisper inference: {e}")
-            raise ModelError(f"Failed to create Whisper inference: {e}")
+            self.logger.exception(f"Error creating Whisper inference: {e}")
+            msg = f"Failed to create Whisper inference: {e}"
+            raise ModelError(msg)
 
 
 class FasterWhisperInference:
-    """
-    Wrapper class for faster-whisper model with optimized inference settings.
+    """Wrapper class for faster-whisper model with optimized inference settings.
     Provides transcription functionality with performance optimizations.
     """
 
-    def __init__(self, model: WhisperModel, config: WhisperConfig):
-        """
-        Initialize FasterWhisperInference.
+    def __init__(self, model: WhisperModel, config: WhisperConfig) -> None:
+        """Initialize FasterWhisperInference.
 
         Args:
             model: WhisperModel instance
             config: Whisper configuration
+
         """
         self.model = model
         self.config = config
@@ -226,8 +223,7 @@ class FasterWhisperInference:
         initial_prompt: str | None = None,
         **kwargs,
     ) -> dict[str, Any]:
-        """
-        Transcribe audio file to text with timestamps.
+        """Transcribe audio file to text with timestamps.
 
         Args:
             audio_path: Path to audio file
@@ -240,9 +236,10 @@ class FasterWhisperInference:
 
         Raises:
             AudioProcessingError: If transcription fails
+
         """
         try:
-            self.logger.info(f"Starting transcription: {audio_path}")
+            self.logger.info("Starting transcription: %s", audio_path)
 
             # Set default transcription parameters
             transcribe_params = {
@@ -303,7 +300,7 @@ class FasterWhisperInference:
                 "language_probability": info.language_probability,
                 "duration": info.duration,
                 "duration_after_vad": getattr(
-                    info, "duration_after_vad", info.duration
+                    info, "duration_after_vad", info.duration,
                 ),
                 "transcription_info": {
                     "model_size": self.config.model_size,
@@ -317,29 +314,30 @@ class FasterWhisperInference:
 
             self.logger.info(
                 f"Transcription completed: {len(segments_list)} segments, "
-                f"{total_duration:.2f}s duration, language: {info.language}"
+                f"{total_duration:.2f}s duration, language: {info.language}",
             )
 
             return result
 
         except Exception as e:
-            self.logger.error(f"Transcription failed for {audio_path}: {e}")
-            from ..utils.error_handling import AudioProcessingError
+            self.logger.exception(f"Transcription failed for {audio_path}: {e}")
+            from src.utils.error_handling import AudioProcessingError
 
-            raise AudioProcessingError(f"Transcription failed: {e}", audio_path)
+            msg = f"Transcription failed: {e}"
+            raise AudioProcessingError(msg, audio_path)
 
     def detect_language(self, audio_path: str) -> dict[str, Any]:
-        """
-        Detect the language of an audio file.
+        """Detect the language of an audio file.
 
         Args:
             audio_path: Path to audio file
 
         Returns:
             Dict containing detected language and confidence
+
         """
         try:
-            self.logger.debug(f"Detecting language for: {audio_path}")
+            self.logger.debug("Detecting language for: %s", audio_path)
 
             # Use the model's language detection
             segments, info = self.model.transcribe(
@@ -353,10 +351,8 @@ class FasterWhisperInference:
             )
 
             # Consume first segment to trigger language detection
-            try:
+            with contextlib.suppress(StopIteration):
                 next(segments)
-            except StopIteration:
-                pass
 
             result = {
                 "language": info.language,
@@ -366,16 +362,17 @@ class FasterWhisperInference:
 
             self.logger.debug(
                 f"Language detected: {info.language} "
-                f"(confidence: {info.language_probability:.3f})"
+                f"(confidence: {info.language_probability:.3f})",
             )
 
             return result
 
         except Exception as e:
-            self.logger.error(f"Language detection failed for {audio_path}: {e}")
-            from ..utils.error_handling import AudioProcessingError
+            self.logger.exception(f"Language detection failed for {audio_path}: {e}")
+            from src.utils.error_handling import AudioProcessingError
 
-            raise AudioProcessingError(f"Language detection failed: {e}", audio_path)
+            msg = f"Language detection failed: {e}"
+            raise AudioProcessingError(msg, audio_path)
 
     def get_model_info(self) -> dict[str, Any]:
         """Get information about the loaded model."""

@@ -40,6 +40,7 @@ RUN groupadd -r transcribe && useradd -r -g transcribe transcribe
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    curl \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 

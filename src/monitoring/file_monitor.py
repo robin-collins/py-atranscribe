@@ -1,22 +1,19 @@
-"""
-File monitoring system for detecting new audio files for transcription.
+"""File monitoring system for detecting new audio files for transcription.
 Uses watchdog for efficient file system monitoring with stability detection.
 """
 
 import asyncio
-import hashlib
+import contextlib
 import logging
 import time
-from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
 
-from watchdog.events import FileCreatedEvent, FileModifiedEvent, FileSystemEventHandler
+from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from ..config import AppConfig
+from src.config import AppConfig
 
 
 @dataclass
@@ -32,31 +29,30 @@ class FileInfo:
 
 
 class FileStabilityTracker:
-    """
-    Tracks file stability to ensure files are completely written before processing.
+    """Tracks file stability to ensure files are completely written before processing.
     Uses size and modification time to detect when files have stopped changing.
     """
 
-    def __init__(self, stability_delay: float = 5.0):
-        """
-        Initialize file stability tracker.
+    def __init__(self, stability_delay: float = 5.0) -> None:
+        """Initialize file stability tracker.
 
         Args:
-            stability_delay: Seconds to wait after last change before considering file stable
+            stability_delay: Seconds to wait after last change before file is stable
+
         """
         self.stability_delay = stability_delay
         self.file_info: dict[Path, FileInfo] = {}
         self.logger = logging.getLogger(__name__)
 
     def update_file(self, file_path: Path) -> bool:
-        """
-        Update file information and check if it's stable.
+        """Update file information and check if it's stable.
 
         Args:
             file_path: Path to the file to check
 
         Returns:
             bool: True if file is stable and ready for processing
+
         """
         try:
             if not file_path.exists():
@@ -79,7 +75,7 @@ class FileStabilityTracker:
                     stable_since=None,
                     processed=False,
                 )
-                self.logger.debug(f"New file detected: {file_path}")
+                self.logger.debug("New file detected: %s", file_path)
                 return False
 
             file_info = self.file_info[file_path]
@@ -93,13 +89,13 @@ class FileStabilityTracker:
                 file_info.size = current_size
                 file_info.modified_time = current_mtime
                 file_info.stable_since = None
-                self.logger.debug(f"File changed: {file_path} (size: {current_size})")
+                self.logger.debug("File changed: %s (size: %s)", file_path, current_size)
                 return False
 
             # File hasn't changed, check stability
             if file_info.stable_since is None:
                 file_info.stable_since = current_time
-                self.logger.debug(f"File stabilizing: {file_path}")
+                self.logger.debug("File stabilizing: %s", file_path)
                 return False
 
             # Check if file has been stable long enough
@@ -107,28 +103,31 @@ class FileStabilityTracker:
             if stable_duration >= self.stability_delay:
                 if not file_info.processed:
                     self.logger.info(
-                        f"File stable and ready: {file_path} (size: {current_size})"
+                        f"File stable and ready: {file_path} (size: {current_size})",
                     )
                     return True
 
             return False
 
         except OSError as e:
-            self.logger.warning(f"Error checking file {file_path}: {e}")
+            self.logger.warning("Error checking file %s: %s", file_path, e)
             return False
 
     def mark_processed(self, file_path: Path) -> None:
         """Mark a file as processed to avoid reprocessing."""
         if file_path in self.file_info:
             self.file_info[file_path].processed = True
-            self.logger.debug(f"File marked as processed: {file_path}")
+            self.logger.debug("File marked as processed: %s", file_path)
 
     def is_processed(self, file_path: Path) -> bool:
         """Check if a file has already been processed."""
         return self.file_info.get(file_path, FileInfo(Path(), 0, 0)).processed
 
     def get_pending_files(self) -> list[Path]:
-        """Get list of files that are stable but not yet processed, excluding the most recent file unless it's older than 24 hours."""
+        """Get list of files that are stable but not yet processed.
+
+        Excludes the most recent file unless it's older than 24 hours.
+        """
         current_time = time.time()
         pending = []
 
@@ -140,7 +139,7 @@ class FileStabilityTracker:
             ):
                 pending.append(file_path)
 
-        # If we have files to process, exclude the most recent one unless it's older than 24 hours
+        # If we have files to process, exclude the most recent one unless > 24hrs old
         if len(pending) > 1:
             # Sort by modification time (oldest first)
             pending_with_mtime = [(f, self.file_info[f].modified_time) for f in pending]
@@ -155,7 +154,10 @@ class FileStabilityTracker:
             if most_recent_mtime > twenty_four_hours_ago:
                 # Most recent file is newer than 24 hours, exclude it
                 pending = [f for f, _ in pending_with_mtime[:-1]]
-                self.logger.debug(f"Excluding most recent file from processing: {most_recent_file} (created: {time.ctime(most_recent_mtime)})")
+                self.logger.debug(
+                    f"Excluding most recent file from processing: {most_recent_file} "
+                    f"(created: {time.ctime(most_recent_mtime)})",
+                )
             else:
                 # Most recent file is older than 24 hours, include all files
                 pending = [f for f, _ in pending_with_mtime]
@@ -168,7 +170,10 @@ class FileStabilityTracker:
             if single_file_mtime > twenty_four_hours_ago:
                 # Single file is newer than 24 hours, exclude it
                 pending = []
-                self.logger.debug(f"Excluding single recent file from processing: {single_file} (created: {time.ctime(single_file_mtime)})")
+                self.logger.debug(
+                    f"Excluding single recent file from processing: {single_file} "
+                    f"(created: {time.ctime(single_file_mtime)})",
+                )
 
         return pending
 
@@ -188,7 +193,7 @@ class FileStabilityTracker:
 
         for file_path in to_remove:
             del self.file_info[file_path]
-            self.logger.debug(f"Cleaned up old entry: {file_path}")
+            self.logger.debug("Cleaned up old entry: %s", file_path)
 
 
 class AudioFileHandler(FileSystemEventHandler):
@@ -199,14 +204,14 @@ class AudioFileHandler(FileSystemEventHandler):
         supported_formats: list[str],
         stability_tracker: FileStabilityTracker,
         callback: Callable[[Path], None] | None = None,
-    ):
-        """
-        Initialize audio file handler.
+    ) -> None:
+        """Initialize audio file handler.
 
         Args:
             supported_formats: List of supported file extensions (with dots)
             stability_tracker: File stability tracker instance
             callback: Optional callback function when stable files are detected
+
         """
         self.supported_formats = {fmt.lower() for fmt in supported_formats}
         self.stability_tracker = stability_tracker
@@ -217,12 +222,12 @@ class AudioFileHandler(FileSystemEventHandler):
         """Check if file format is supported."""
         return file_path.suffix.lower() in self.supported_formats
 
-    def on_created(self, event):
+    def on_created(self, event) -> None:
         """Handle file creation events."""
         if not event.is_directory:
             self._handle_file_event(Path(event.src_path))
 
-    def on_modified(self, event):
+    def on_modified(self, event) -> None:
         """Handle file modification events."""
         if not event.is_directory:
             self._handle_file_event(Path(event.src_path))
@@ -232,7 +237,7 @@ class AudioFileHandler(FileSystemEventHandler):
         if not self.is_supported_format(file_path):
             return
 
-        self.logger.debug(f"File event: {file_path}")
+        self.logger.debug("File event: %s", file_path)
 
         # Update stability tracking
         if self.stability_tracker.update_file(file_path):
@@ -241,24 +246,23 @@ class AudioFileHandler(FileSystemEventHandler):
                 try:
                     self.callback(file_path)
                 except Exception as e:
-                    self.logger.error(f"Error in file callback for {file_path}: {e}")
+                    self.logger.exception(f"Error in file callback for {file_path}: {e}")
 
 
 class FileMonitor:
-    """
-    Main file monitoring class that watches for new audio files.
+    """Main file monitoring class that watches for new audio files.
     Implements efficient file system monitoring with stability detection.
     """
 
     def __init__(
-        self, config: AppConfig, callback: Callable[[Path], None] | None = None
-    ):
-        """
-        Initialize file monitor.
+        self, config: AppConfig, callback: Callable[[Path], None] | None = None,
+    ) -> None:
+        """Initialize file monitor.
 
         Args:
             config: Application configuration
             callback: Callback function called when files are ready for processing
+
         """
         self.config = config
         self.callback = callback
@@ -266,7 +270,7 @@ class FileMonitor:
 
         # Initialize components
         self.stability_tracker = FileStabilityTracker(
-            stability_delay=config.monitoring.stability_delay
+            stability_delay=config.monitoring.stability_delay,
         )
 
         self.handler = AudioFileHandler(
@@ -282,13 +286,13 @@ class FileMonitor:
     def _on_file_ready(self, file_path: Path) -> None:
         """Internal callback when a file is ready for processing."""
         if not self.stability_tracker.is_processed(file_path):
-            self.logger.info(f"File ready for processing: {file_path}")
+            self.logger.info("File ready for processing: %s", file_path)
             if self.callback:
                 try:
                     self.callback(file_path)
                 except Exception as e:
-                    self.logger.error(
-                        f"Error in processing callback for {file_path}: {e}"
+                    self.logger.exception(
+                        f"Error in processing callback for {file_path}: {e}",
                     )
 
     async def start(self) -> None:
@@ -300,8 +304,9 @@ class FileMonitor:
         # Ensure input directory exists
         input_dir = self.config.directories.input
         if not input_dir.exists():
-            self.logger.error(f"Input directory does not exist: {input_dir}")
-            raise FileNotFoundError(f"Input directory not found: {input_dir}")
+            self.logger.error("Input directory does not exist: %s", input_dir)
+            msg = f"Input directory not found: {input_dir}"
+            raise FileNotFoundError(msg)
 
         # Start watchdog observer
         self.observer.schedule(self.handler, str(input_dir), recursive=False)
@@ -311,7 +316,7 @@ class FileMonitor:
         self._running = True
         self._scan_task = asyncio.create_task(self._periodic_scan())
 
-        self.logger.info(f"File monitor started, watching: {input_dir}")
+        self.logger.info("File monitor started, watching: %s", input_dir)
 
     async def stop(self) -> None:
         """Stop file monitoring."""
@@ -323,10 +328,8 @@ class FileMonitor:
         # Stop periodic scanning
         if self._scan_task:
             self._scan_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._scan_task
-            except asyncio.CancelledError:
-                pass
 
         # Stop watchdog observer
         self.observer.stop()
@@ -335,8 +338,7 @@ class FileMonitor:
         self.logger.info("File monitor stopped")
 
     async def _periodic_scan(self) -> None:
-        """
-        Periodically scan for existing files and check stability.
+        """Periodically scan for existing files and check stability.
         This catches files that were created before monitoring started
         or events that were missed.
         """
@@ -351,7 +353,7 @@ class FileMonitor:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"Error in periodic scan: {e}")
+                self.logger.exception(f"Error in periodic scan: {e}")
                 await asyncio.sleep(5.0)  # Wait before retrying
 
     async def _scan_existing_files(self) -> None:
@@ -369,7 +371,7 @@ class FileMonitor:
                     self.stability_tracker.update_file(file_path)
 
         except OSError as e:
-            self.logger.error(f"Error scanning input directory {input_dir}: {e}")
+            self.logger.exception(f"Error scanning input directory {input_dir}: {e}")
 
     async def _check_pending_files(self) -> None:
         """Check for files that have become stable and ready for processing."""
@@ -396,17 +398,16 @@ class FileMonitor:
 
 
 class ProcessingQueue:
-    """
-    Thread-safe queue for managing files to be processed.
+    """Thread-safe queue for managing files to be processed.
     Provides deduplication and priority handling.
     """
 
-    def __init__(self, max_size: int = 1000):
-        """
-        Initialize processing queue.
+    def __init__(self, max_size: int = 1000) -> None:
+        """Initialize processing queue.
 
         Args:
             max_size: Maximum number of files in queue
+
         """
         self.max_size = max_size
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
@@ -416,37 +417,37 @@ class ProcessingQueue:
         self.logger = logging.getLogger(__name__)
 
     async def put(self, file_path: Path) -> bool:
-        """
-        Add a file to the processing queue.
+        """Add a file to the processing queue.
 
         Args:
             file_path: Path to file to be processed
 
         Returns:
             bool: True if file was added, False if already in queue or processing
+
         """
         async with self.lock:
             if file_path in self.in_queue or file_path in self.processing:
-                self.logger.debug(f"File already queued or processing: {file_path}")
+                self.logger.debug("File already queued or processing: %s", file_path)
                 return False
 
             try:
                 await self.queue.put(file_path)
                 self.in_queue.add(file_path)
-                self.logger.debug(f"File added to queue: {file_path}")
+                self.logger.debug("File added to queue: %s", file_path)
                 return True
             except asyncio.QueueFull:
                 self.logger.warning(
-                    f"Processing queue is full, dropping file: {file_path}"
+                    f"Processing queue is full, dropping file: {file_path}",
                 )
                 return False
 
     async def get(self) -> Path:
-        """
-        Get next file from processing queue.
+        """Get next file from processing queue.
 
         Returns:
             Path: Next file to process
+
         """
         file_path = await self.queue.get()
 
@@ -457,17 +458,17 @@ class ProcessingQueue:
         return file_path
 
     async def mark_done(self, file_path: Path) -> None:
-        """
-        Mark a file as completed processing.
+        """Mark a file as completed processing.
 
         Args:
             file_path: Path to completed file
+
         """
         async with self.lock:
             self.processing.discard(file_path)
 
         self.queue.task_done()
-        self.logger.debug(f"File processing completed: {file_path}")
+        self.logger.debug("File processing completed: %s", file_path)
 
     async def size(self) -> int:
         """Get current queue size."""

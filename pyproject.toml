@@ -13,7 +13,7 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "T20", "RUF"]
+select = ["ALL"]
 ignore = ["E501", "F401", "T201"]
 fixable = ["ALL"]
 

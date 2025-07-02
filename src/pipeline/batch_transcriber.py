@@ -1,5 +1,4 @@
-"""
-Main pipeline orchestrator for batch transcription and diarization.
+"""Main pipeline orchestrator for batch transcription and diarization.
 Coordinates the entire processing workflow from audio input to multi-format output.
 """
 
@@ -10,13 +9,13 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ..config import AppConfig
-from ..diarization.diarizer import DiarizationResult, Diarizer
-from ..output.subtitle_manager import SubtitleManager
-from ..transcription.whisper_factory import FasterWhisperInference, WhisperFactory
-from ..utils.error_handling import (
+from src.config import AppConfig
+from src.diarization.diarizer import DiarizationResult, Diarizer
+from src.output.subtitle_manager import SubtitleManager
+from src.transcription.whisper_factory import FasterWhisperInference, WhisperFactory
+from src.utils.error_handling import (
     AudioProcessingError,
     FileSystemError,
     error_tracker,
@@ -53,17 +52,16 @@ class ProcessingProgress:
 
 
 class BatchTranscriber:
-    """
-    Main orchestrator for the transcription and diarization pipeline.
+    """Main orchestrator for the transcription and diarization pipeline.
     Handles the complete workflow from audio input to multi-format output.
     """
 
-    def __init__(self, config: AppConfig):
-        """
-        Initialize BatchTranscriber with configuration.
+    def __init__(self, config: AppConfig) -> None:
+        """Initialize BatchTranscriber with configuration.
 
         Args:
             config: Application configuration
+
         """
         self.config = config
         self.logger = logging.getLogger(__name__)
@@ -89,20 +87,20 @@ class BatchTranscriber:
 
             # Initialize Whisper model
             self._whisper_inference = self.whisper_factory.create_whisper_inference(
-                self.config.transcription.whisper
+                self.config.transcription.whisper,
             )
 
             # Verify diarization if enabled
             if self.config.diarization.enabled:
                 if not self.diarizer.is_enabled():
                     self.logger.warning(
-                        "Diarization requested but not properly initialized"
+                        "Diarization requested but not properly initialized",
                     )
 
             self.logger.info("Transcription pipeline initialized successfully")
 
         except Exception as e:
-            self.logger.error(f"Failed to initialize transcription pipeline: {e}")
+            self.logger.exception(f"Failed to initialize transcription pipeline: {e}")
             raise
 
     @retry_on_error()
@@ -111,8 +109,7 @@ class BatchTranscriber:
         file_path: Path,
         progress_callback: Callable[[ProcessingProgress], None] | None = None,
     ) -> ProcessingResult:
-        """
-        Process a single audio file through the complete pipeline.
+        """Process a single audio file through the complete pipeline.
 
         Args:
             file_path: Path to audio file to process
@@ -120,10 +117,11 @@ class BatchTranscriber:
 
         Returns:
             ProcessingResult: Results of processing
+
         """
         start_time = time.time()
 
-        def report_progress(stage: str, progress: float, message: str = ""):
+        def report_progress(stage: str, progress: float, message: str = "") -> None:
             if progress_callback:
                 progress_info = ProcessingProgress(
                     stage=stage,
@@ -134,17 +132,18 @@ class BatchTranscriber:
                 try:
                     progress_callback(progress_info)
                 except Exception as e:
-                    self.logger.warning(f"Error in progress callback: {e}")
+                    self.logger.warning("Error in progress callback: %s", e)
 
         try:
-            self.logger.info(f"Starting processing of: {file_path}")
+            self.logger.info("Starting processing of: %s", file_path)
             report_progress(
-                "initialization", 0.0, f"Starting processing of {file_path.name}"
+                "initialization", 0.0, f"Starting processing of {file_path.name}",
             )
 
             # Validate input file
             if not file_path.exists():
-                raise FileSystemError(f"Input file not found: {file_path}")
+                msg = f"Input file not found: {file_path}"
+                raise FileSystemError(msg)
 
             if not self._whisper_inference:
                 await self.initialize()
@@ -154,7 +153,7 @@ class BatchTranscriber:
             transcription_result = await self._transcribe_audio(file_path)
 
             if not transcription_result or not transcription_result.get("segments"):
-                self.logger.warning(f"No transcription results for {file_path}")
+                self.logger.warning("No transcription results for %s", file_path)
                 return ProcessingResult(
                     input_file=file_path,
                     output_files={},
@@ -187,10 +186,10 @@ class BatchTranscriber:
 
             # Stage 3: Merge transcription and diarization
             report_progress(
-                "merging", 0.75, "Merging transcription and diarization results..."
+                "merging", 0.75, "Merging transcription and diarization results...",
             )
             labeled_segments = self._merge_results(
-                transcription_result, diarization_result
+                transcription_result, diarization_result,
             )
 
             # Stage 4: Generate outputs
@@ -215,16 +214,16 @@ class BatchTranscriber:
             # Update statistics
             self._processing_stats["files_processed"] += 1
             self._processing_stats["total_duration"] += transcription_result.get(
-                "duration", 0
+                "duration", 0,
             )
             self._processing_stats["total_processing_time"] += processing_time
 
             report_progress(
-                "completed", 1.0, f"Processing completed in {processing_time:.2f}s"
+                "completed", 1.0, f"Processing completed in {processing_time:.2f}s",
             )
 
             self.logger.info(
-                f"Successfully processed {file_path} in {processing_time:.2f}s"
+                f"Successfully processed {file_path} in {processing_time:.2f}s",
             )
 
             return ProcessingResult(
@@ -248,7 +247,7 @@ class BatchTranscriber:
             processing_time = time.time() - start_time
             error_message = str(e)
 
-            self.logger.error(f"Failed to process {file_path}: {error_message}")
+            self.logger.exception(f"Failed to process {file_path}: {error_message}")
 
             # Update error statistics
             self._processing_stats["files_failed"] += 1
@@ -272,19 +271,17 @@ class BatchTranscriber:
 
             # Run transcription in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, self._whisper_inference.transcribe, str(file_path), language
+            return await loop.run_in_executor(
+                None, self._whisper_inference.transcribe, str(file_path), language,
             )
 
-            return result
 
         except Exception as e:
-            self.logger.error(f"Transcription failed for {file_path}: {e}")
-            raise AudioProcessingError(f"Transcription failed: {e}", str(file_path))
+            self.logger.exception(f"Transcription failed for {file_path}: {e}")
+            msg = f"Transcription failed: {e}"
+            raise AudioProcessingError(msg, str(file_path))
 
-    async def _perform_diarization(
-        self, file_path: Path
-    ) -> DiarizationResult | None:
+    async def _perform_diarization(self, file_path: Path) -> DiarizationResult | None:
         """Perform speaker diarization."""
         try:
             if not self.diarizer.is_enabled():
@@ -292,15 +289,14 @@ class BatchTranscriber:
 
             # Run diarization in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, self.diarizer.diarize, str(file_path)
+            return await loop.run_in_executor(
+                None, self.diarizer.diarize, str(file_path),
             )
 
-            return result
 
         except Exception as e:
             self.logger.warning(
-                f"Diarization failed for {file_path}, continuing without speaker labels: {e}"
+                f"Diarization failed for {file_path}, continuing without speaker labels: {e}",
             )
             # Don't raise exception for diarization failures, continue without speaker labels
             return None
@@ -316,7 +312,7 @@ class BatchTranscriber:
         if diarization_result and diarization_result.speakers:
             # Assign speakers to transcription segments
             segments = self.diarizer.assign_speakers_to_segments(
-                segments, diarization_result
+                segments, diarization_result,
             )
         else:
             # Add default speaker labels
@@ -330,15 +326,14 @@ class BatchTranscriber:
             min_confidence=-1.5,  # Permissive threshold
         )
 
-        segments = self.subtitle_manager.merge_short_segments(
+        return self.subtitle_manager.merge_short_segments(
             segments,
             min_duration=0.5,  # Merge very short segments
         )
 
-        return segments
 
     async def _generate_outputs(
-        self, input_path: Path, segments: list[dict[str, Any]], metadata: dict[str, Any]
+        self, input_path: Path, segments: list[dict[str, Any]], metadata: dict[str, Any],
     ) -> dict[str, Path]:
         """Generate output files in multiple formats."""
         try:
@@ -350,18 +345,18 @@ class BatchTranscriber:
             metadata.update(transcript_summary)
 
             # Save transcripts in requested formats
-            output_files = self.subtitle_manager.save_transcripts(
+            return self.subtitle_manager.save_transcripts(
                 segments=segments,
                 output_path=output_base,
                 formats=self.config.transcription.output_formats,
                 metadata=metadata,
             )
 
-            return output_files
 
         except Exception as e:
-            self.logger.error(f"Failed to generate outputs for {input_path}: {e}")
-            raise FileSystemError(f"Failed to generate outputs: {e}", str(input_path))
+            self.logger.exception(f"Failed to generate outputs for {input_path}: {e}")
+            msg = f"Failed to generate outputs: {e}"
+            raise FileSystemError(msg, str(input_path))
 
     async def _post_process_file(self, file_path: Path) -> None:
         """Perform post-processing on the input file."""
@@ -370,7 +365,7 @@ class BatchTranscriber:
 
             if action == "delete":
                 file_path.unlink()
-                self.logger.info(f"Deleted input file: {file_path}")
+                self.logger.info("Deleted input file: %s", file_path)
 
             elif action == "move":
                 backup_dir = self.config.directories.backup
@@ -397,19 +392,19 @@ class BatchTranscriber:
                     counter += 1
 
                 file_path.rename(backup_path)
-                self.logger.info(f"Moved input file to backup: {backup_path}")
+                self.logger.info("Moved input file to backup: %s", backup_path)
 
             elif action == "keep":
-                self.logger.debug(f"Keeping input file: {file_path}")
+                self.logger.debug("Keeping input file: %s", file_path)
             else:
-                self.logger.warning(f"Unknown post-processing action: {action}")
+                self.logger.warning("Unknown post-processing action: %s", action)
 
         except Exception as e:
-            self.logger.error(f"Post-processing failed for {file_path}: {e}")
+            self.logger.exception(f"Post-processing failed for {file_path}: {e}")
             # Don't raise exception for post-processing failures
 
     def _get_diarization_info(
-        self, diarization_result: DiarizationResult | None
+        self, diarization_result: DiarizationResult | None,
     ) -> dict[str, Any] | None:
         """Extract diarization information for metadata."""
         if not diarization_result:
@@ -477,9 +472,9 @@ class BatchTranscriber:
             self.logger.info("Batch transcriber cleanup completed")
 
         except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
+            self.logger.exception(f"Error during cleanup: {e}")
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Destructor to ensure cleanup."""
         try:
             # Run cleanup synchronously

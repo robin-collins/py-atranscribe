@@ -1,20 +1,18 @@
-"""
-Multi-format subtitle and transcript generation manager.
+"""Multi-format subtitle and transcript generation manager.
 Supports SRT, WebVTT, TXT, JSON, TSV, and LRC output formats.
 """
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import srt
 import webvtt
 
-from ..utils.error_handling import FileSystemError, retry_on_error
+from src.utils.error_handling import FileSystemError, retry_on_error
 
 
 @dataclass
@@ -31,12 +29,11 @@ class TranscriptSegment:
 
 
 class SubtitleManager:
-    """
-    Manages the creation and output of transcripts in multiple formats.
+    """Manages the creation and output of transcripts in multiple formats.
     Supports SRT, WebVTT, TXT, JSON, TSV, and LRC formats.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize SubtitleManager."""
         self.logger = logging.getLogger(__name__)
 
@@ -45,11 +42,10 @@ class SubtitleManager:
         self,
         segments: list[dict[str, Any]],
         output_path: Path,
-        formats: list[str] = None,
+        formats: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Path]:
-        """
-        Save transcripts in multiple formats.
+        """Save transcripts in multiple formats.
 
         Args:
             segments: List of transcript segments with timing and speaker info
@@ -62,6 +58,7 @@ class SubtitleManager:
 
         Raises:
             FileSystemError: If file writing fails
+
         """
         if formats is None:
             formats = ["srt", "webvtt", "txt", "json", "tsv", "lrc"]
@@ -82,50 +79,51 @@ class SubtitleManager:
             try:
                 if format_name.lower() == "srt":
                     file_path = self._save_srt(
-                        transcript_segments, output_path.with_suffix(".srt")
+                        transcript_segments, output_path.with_suffix(".srt"),
                     )
                 elif format_name.lower() == "webvtt":
                     file_path = self._save_webvtt(
-                        transcript_segments, output_path.with_suffix(".vtt")
+                        transcript_segments, output_path.with_suffix(".vtt"),
                     )
                 elif format_name.lower() == "txt":
                     file_path = self._save_txt(
-                        transcript_segments, output_path.with_suffix(".txt")
+                        transcript_segments, output_path.with_suffix(".txt"),
                     )
                 elif format_name.lower() == "json":
                     file_path = self._save_json(
-                        transcript_segments, output_path.with_suffix(".json"), metadata
+                        transcript_segments, output_path.with_suffix(".json"), metadata,
                     )
                 elif format_name.lower() == "tsv":
                     file_path = self._save_tsv(
-                        transcript_segments, output_path.with_suffix(".tsv")
+                        transcript_segments, output_path.with_suffix(".tsv"),
                     )
                 elif format_name.lower() == "lrc":
                     file_path = self._save_lrc(
-                        transcript_segments, output_path.with_suffix(".lrc")
+                        transcript_segments, output_path.with_suffix(".lrc"),
                     )
                 else:
-                    self.logger.warning(f"Unsupported format: {format_name}")
+                    self.logger.warning("Unsupported format: %s", format_name)
                     continue
 
                 saved_files[format_name] = file_path
                 self.logger.debug(
-                    f"Saved {format_name.upper()} transcript: {file_path}"
+                    f"Saved {format_name.upper()} transcript: {file_path}",
                 )
 
             except Exception as e:
-                self.logger.error(f"Failed to save {format_name} format: {e}")
+                self.logger.exception(f"Failed to save {format_name} format: {e}")
+                msg = f"Failed to save {format_name} format: {e}"
                 raise FileSystemError(
-                    f"Failed to save {format_name} format: {e}", str(output_path)
+                    msg, str(output_path),
                 )
 
         self.logger.info(
-            f"Saved transcripts in {len(saved_files)} formats: {list(saved_files.keys())}"
+            f"Saved transcripts in {len(saved_files)} formats: {list(saved_files.keys())}",
         )
         return saved_files
 
     def _convert_segments(
-        self, segments: list[dict[str, Any]]
+        self, segments: list[dict[str, Any]],
     ) -> list[TranscriptSegment]:
         """Convert raw segments to internal TranscriptSegment format."""
         transcript_segments = []
@@ -159,7 +157,7 @@ class SubtitleManager:
             text = self._format_text_with_speaker(segment)
 
             subtitle = srt.Subtitle(
-                index=i, start=start_time, end=end_time, content=text
+                index=i, start=start_time, end=end_time, content=text,
             )
             srt_subtitles.append(subtitle)
 
@@ -171,7 +169,7 @@ class SubtitleManager:
         return output_path
 
     def _save_webvtt(
-        self, segments: list[TranscriptSegment], output_path: Path
+        self, segments: list[TranscriptSegment], output_path: Path,
     ) -> Path:
         """Save transcript in WebVTT format."""
         vtt = webvtt.WebVTT()
@@ -253,7 +251,7 @@ class SubtitleManager:
             "statistics": {
                 "total_segments": len(segments),
                 "total_duration": max((s.end for s in segments), default=0.0),
-                "speakers": list(set(s.speaker for s in segments if s.speaker)),
+                "speakers": list({s.speaker for s in segments if s.speaker}),
                 "word_count": sum(len(segment.text.split()) for segment in segments),
             },
         }
@@ -314,7 +312,7 @@ class SubtitleManager:
         return output_path
 
     def _format_text_with_speaker(
-        self, segment: TranscriptSegment, prefix: str = ""
+        self, segment: TranscriptSegment, prefix: str = "",
     ) -> str:
         """Format text with optional speaker label."""
         if segment.speaker:
@@ -336,14 +334,14 @@ class SubtitleManager:
         return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
     def get_transcript_summary(self, segments: list[dict[str, Any]]) -> dict[str, Any]:
-        """
-        Generate a summary of the transcript.
+        """Generate a summary of the transcript.
 
         Args:
             segments: List of transcript segments
 
         Returns:
             Dict with transcript statistics and summary
+
         """
         if not segments:
             return {
@@ -357,7 +355,7 @@ class SubtitleManager:
 
         total_duration = max((s.get("end", 0) for s in segments), default=0.0)
         total_words = sum(len(s.get("text", "").split()) for s in segments)
-        speakers = list(set(s.get("speaker") for s in segments if s.get("speaker")))
+        speakers = list({s.get("speaker") for s in segments if s.get("speaker")})
 
         # Calculate speaker statistics
         speaker_stats = {}
@@ -371,7 +369,7 @@ class SubtitleManager:
                 }
 
             speaker_stats[speaker]["duration"] += segment.get("end", 0) - segment.get(
-                "start", 0
+                "start", 0,
             )
             speaker_stats[speaker]["segments"] += 1
             speaker_stats[speaker]["words"] += len(segment.get("text", "").split())
@@ -392,10 +390,9 @@ class SubtitleManager:
         }
 
     def merge_short_segments(
-        self, segments: list[dict[str, Any]], min_duration: float = 1.0
+        self, segments: list[dict[str, Any]], min_duration: float = 1.0,
     ) -> list[dict[str, Any]]:
-        """
-        Merge very short segments with adjacent segments to improve readability.
+        """Merge very short segments with adjacent segments to improve readability.
 
         Args:
             segments: List of segments to merge
@@ -403,6 +400,7 @@ class SubtitleManager:
 
         Returns:
             List of merged segments
+
         """
         if not segments:
             return segments
@@ -453,15 +451,14 @@ class SubtitleManager:
             merged_segments.append(current_segment)
 
         self.logger.debug(
-            f"Merged {len(segments)} segments into {len(merged_segments)} segments"
+            f"Merged {len(segments)} segments into {len(merged_segments)} segments",
         )
         return merged_segments
 
     def filter_low_confidence_segments(
-        self, segments: list[dict[str, Any]], min_confidence: float = -1.0
+        self, segments: list[dict[str, Any]], min_confidence: float = -1.0,
     ) -> list[dict[str, Any]]:
-        """
-        Filter out segments with very low confidence scores.
+        """Filter out segments with very low confidence scores.
 
         Args:
             segments: List of segments to filter
@@ -469,6 +466,7 @@ class SubtitleManager:
 
         Returns:
             List of filtered segments
+
         """
         if min_confidence <= -2.0:  # Very permissive threshold
             return segments
@@ -481,10 +479,10 @@ class SubtitleManager:
                 filtered_segments.append(segment)
             else:
                 self.logger.debug(
-                    f"Filtered low confidence segment: {confidence:.3f} < {min_confidence}"
+                    f"Filtered low confidence segment: {confidence:.3f} < {min_confidence}",
                 )
 
         self.logger.debug(
-            f"Filtered {len(segments) - len(filtered_segments)} low confidence segments"
+            f"Filtered {len(segments) - len(filtered_segments)} low confidence segments",
         )
         return filtered_segments
