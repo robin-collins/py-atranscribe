@@ -1,0 +1,73 @@
+# Docker Compose configuration for py-atranscribe
+# Automated Audio Transcription with Speaker Diarization
+
+name: py-atranscribe
+
+services:
+  transcriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: py-atranscribe
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # Volume mounts
+    volumes:
+      - /mnt/shared/raspi-audio:/data/in
+      - /mnt/shared/raspi-audio/audio/output:/data/out
+      - /mnt/shared/raspi-audio/audio/backup:/data/backup
+      - ./config.yaml:/app/config.yaml:ro  # Mount config as read-only
+      - /mnt/shared/raspi-audio/audio/logs/transcribe.log:/var/log/transcribe.log:rw
+      - transcribe-cache:/home/transcribe/.cache
+      - transcribe-models:/root/.cache  # For model caching
+
+    # Port mapping for health checks
+    ports:
+      - "8000:8000"  # Health check endpoint
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+
+#    GPU support (uncomment if using GPU)
+#    deploy:
+#      resources:
+#        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 5s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes
+volumes:
+  transcribe-cache:
+    driver: local
+  transcribe-models:
+    driver: local
+
+# Networks
+networks:
+  default:
+    name: py-atranscribe-network

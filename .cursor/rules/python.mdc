@@ -1,0 +1,148 @@
+---
+globs: *.py
+alwaysApply: false
+---
+## Mandatory Rules
+
+These rules must be followed:
+
+- Dependencies: List external dependencies at the end of the code output. Include installation instructions if needed.
+- File Encoding: Specify file encoding (usually utf-8) when reading or writing a file.
+- Versioning: Increment the smallest version number if one exists; otherwise, create one using `__version__` or appropriate versioning for the language.
+
+## Project Structure & Best Practices (Guidelines)
+
+These guidelines are strongly recommended for building robust and scalable applications:
+
+- Best Practices: Follow coding and security best practices for the language and framework.
+- Error Handling: Handle errors gracefully with clear, human-readable messages.
+- Code Documentation: Provide extensive inline comments.
+- Naming Conventions: Use meaningful names for variables, functions, and classes.
+- DRY Principle: Avoid code duplication.
+- Code Modularity: Break down complex tasks into smaller functions or methods.
+- Project Organization: Organize code into logical, modular files and directories following standard conventions (e.g., app/, models/, routes/, services/, utils/, tests/).
+- Separation of Concerns: Separate concerns by function: API, business logic, data models, utilities, and configuration.
+- Structure Enforcement: Enforce clear, maintainable, and scalable structure.
+- Performance Optimization: Consider algorithmic efficiency, memory usage, and scalability.
+- Named Constants: Use named constants instead of magic numbers.
+- Change Tracking: Provide a concise bullet list of changes made to each file.
+- Detailed Comments: Explain complex logic or design choices in comments.
+- Input Validation: Implement input validation and sanitization.
+- Design Patterns: Use appropriate design patterns and architectural principles.
+- Environment Compatibility: Ensure code compatibility with the target environment.
+- Logging and Monitoring: Implement logging and monitoring.
+- Testability: Write testable code and suggest unit tests.
+- Database Optimization: Optimize database queries.
+- Authentication/Authorization: Implement proper authentication and authorization.
+- Asynchronous Programming: Use asynchronous techniques when appropriate.
+
+## Python Specific Guidelines
+
+Follow these conventions and best practices specific to Python development:
+
+- PEP 8: Adhere to PEP 8 guidelines.
+- Require PEP 8 (or language equivalent) and best practices for naming and documentation.
+- Indentation: Use 4 spaces per indentation level.
+- Line Length: Limit lines to 79 characters (72 for docstrings/comments).
+- Blank Lines: Use two blank lines between top-level definitions and one between methods.
+- Whitespace: Follow PEP 8 whitespace guidelines (e.g., around operators, after commas).
+- Imports: Follow PEP 8 import order and conventions (absolute imports first, then explicit relative; no wildcards).
+- String Checks: Use `startswith()` and `endswith()`.
+- Type Checking: Use `isinstance()`.
+- Singleton Comparisons: Use `is` or `is not` for comparisons to `None`.
+- Context Managers: Use `with` statement for resource management.
+- Comprehensions/Generators: Utilize list comprehensions and generator expressions.
+- Lazy Formatting: Use `logger.info("Message %s", value)` instead of string formatting whenever logging variable data, as it only evaluates the value if that log level is enabled.
+- Standard Library: Leverage Python's built-in data structures and standard library modules.
+- Consistent Returns: Be consistent with return statements.
+- Docstrings/Comments: Use docstrings (`"""`) for multi-line and `#` for single-line comments, adhering to [PEP 257](https://www.python.org/dev/peps/pep-0257/) standards.
+- Comprehensive Docstrings: Provide detailed docstrings for modules, functions, and classes.
+- Naming Conventions: Follow PEP 8 naming conventions (e.g., CapWords for classes, lowercase_with_underscores for functions and variables).
+- Comparison Operators: Use `is not` instead of `not ... is`.
+- Rich Comparisons: Implement rich comparison methods if needed.
+- Lambda Expressions: Define functions with `def` instead of assigning lambdas directly.
+- Exceptions: Derive exceptions from `Exception`.
+- Type Hints: Use type hints and function annotations.
+- Enumerations: Use `enum.Enum`.
+- Specialized Containers: Utilize `collections` module for specialized containers.
+- String Representations: Implement `__str__` and `__repr__` for custom classes.
+- File Paths: Use `pathlib` for file operations.
+- Memoization: Utilize `functools.lru_cache` for memoization.
+- Context Manager Decorator: Use `contextlib.contextmanager`.
+- Resource Management: Implement `__enter__` and `__exit__`.
+- Iteration: Use `itertools` for efficient iteration.
+- Dictionaries: Utilize `defaultdict` and `Counter`.
+- Date/Time: Use `datetime` module.
+- Exception Handling: Implement proper exception handling with specific types and messages.
+ss## Mandatory Rules
+
+These rules must be followed:
+
+- Dependencies: List external dependencies at the end of the code output. Include installation instructions if needed.
+- File Encoding: Specify file encoding (usually utf-8) when reading or writing a file.
+- Versioning: Increment the smallest version number if one exists; otherwise, create one using `__version__` or appropriate versioning for the language.
+
+## Project Structure & Best Practices (Guidelines)
+
+These guidelines are strongly recommended for building robust and scalable applications:
+
+- Best Practices: Follow coding and security best practices for the language and framework.
+- Error Handling: Handle errors gracefully with clear, human-readable messages.
+- Code Documentation: Provide extensive inline comments.
+- Naming Conventions: Use meaningful names for variables, functions, and classes.
+- DRY Principle: Avoid code duplication.
+- Code Modularity: Break down complex tasks into smaller functions or methods.
+- Project Organization: Organize code into logical, modular files and directories following standard conventions (e.g., app/, models/, routes/, services/, utils/, tests/).
+- Separation of Concerns: Separate concerns by function: API, business logic, data models, utilities, and configuration.
+- Structure Enforcement: Enforce clear, maintainable, and scalable structure.
+- Performance Optimization: Consider algorithmic efficiency, memory usage, and scalability.
+- Named Constants: Use named constants instead of magic numbers.
+- Change Tracking: Provide a concise bullet list of changes made to each file.
+- Detailed Comments: Explain complex logic or design choices in comments.
+- Input Validation: Implement input validation and sanitization.
+- Design Patterns: Use appropriate design patterns and architectural principles.
+- Environment Compatibility: Ensure code compatibility with the target environment.
+- Logging and Monitoring: Implement logging and monitoring.
+- Testability: Write testable code and suggest unit tests.
+- Database Optimization: Optimize database queries.
+- Authentication/Authorization: Implement proper authentication and authorization.
+- Asynchronous Programming: Use asynchronous techniques when appropriate.
+
+## Python Specific Guidelines
+
+Follow these conventions and best practices specific to Python development:
+
+- PEP 8: Adhere to PEP 8 guidelines.
+- Require PEP 8 (or language equivalent) and best practices for naming and documentation.
+- Indentation: Use 4 spaces per indentation level.
+- Line Length: Limit lines to 79 characters (72 for docstrings/comments).
+- Blank Lines: Use two blank lines between top-level definitions and one between methods.
+- Whitespace: Follow PEP 8 whitespace guidelines (e.g., around operators, after commas).
+- Imports: Follow PEP 8 import order and conventions (absolute imports first, then explicit relative; no wildcards).
+- String Checks: Use `startswith()` and `endswith()`.
+- Type Checking: Use `isinstance()`.
+- Singleton Comparisons: Use `is` or `is not` for comparisons to `None`.
+- Context Managers: Use `with` statement for resource management.
+- Comprehensions/Generators: Utilize list comprehensions and generator expressions.
+- Lazy Formatting: Use `logger.info("Message %s", value)` instead of string formatting whenever logging variable data, as it only evaluates the value if that log level is enabled.
+- Standard Library: Leverage Python's built-in data structures and standard library modules.
+- Consistent Returns: Be consistent with return statements.
+- Docstrings/Comments: Use docstrings (`"""`) for multi-line and `#` for single-line comments, adhering to [PEP 257](https://www.python.org/dev/peps/pep-0257/) standards.
+- Comprehensive Docstrings: Provide detailed docstrings for modules, functions, and classes.
+- Naming Conventions: Follow PEP 8 naming conventions (e.g., CapWords for classes, lowercase_with_underscores for functions and variables).
+- Comparison Operators: Use `is not` instead of `not ... is`.
+- Rich Comparisons: Implement rich comparison methods if needed.
+- Lambda Expressions: Define functions with `def` instead of assigning lambdas directly.
+- Exceptions: Derive exceptions from `Exception`.
+- Type Hints: Use type hints and function annotations.
+- Enumerations: Use `enum.Enum`.
+- Specialized Containers: Utilize `collections` module for specialized containers.
+- String Representations: Implement `__str__` and `__repr__` for custom classes.
+- File Paths: Use `pathlib` for file operations.
+- Memoization: Utilize `functools.lru_cache` for memoization.
+- Context Manager Decorator: Use `contextlib.contextmanager`.
+- Resource Management: Implement `__enter__` and `__exit__`.
+- Iteration: Use `itertools` for efficient iteration.
+- Dictionaries: Utilize `defaultdict` and `Counter`.
+- Date/Time: Use `datetime` module.
+- Exception Handling: Implement proper exception handling with specific types and messages.
