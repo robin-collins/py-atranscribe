@@ -15,6 +15,7 @@ Example:
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -63,10 +64,8 @@ class SystemMonitor:
         self._monitoring = False
         if self._monitor_task:
             self._monitor_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._monitor_task
-            except asyncio.CancelledError:
-                pass
         self.logger.info("System monitoring stopped")
 
     async def _monitor_loop(self) -> None:
@@ -324,7 +323,7 @@ class StartupChecker:
             if critical:
                 print(f"❌ {name}: {e}")
                 self.checks_failed += 1
-                self.logger.error(
+                self.logger.exception(
                     "Critical check exception: %s - %s (%.3fs)", name, e, elapsed,
                 )
             else:
@@ -418,7 +417,7 @@ class StartupChecker:
 
             # Test basic torch functionality
             x = torch.tensor([1.0, 2.0, 3.0])
-            y = x + 1
+            x + 1
 
             # Test CUDA availability in PyTorch
             cuda_available = torch.cuda.is_available()
@@ -436,7 +435,7 @@ class StartupChecker:
                 # Test basic CUDA tensor operations
                 try:
                     x_cuda = torch.tensor([1.0]).cuda()
-                    y_cuda = x_cuda + 1
+                    x_cuda + 1
                     print("   Basic CUDA tensor operations: Working")
                 except Exception as cuda_error:
                     print(f"   Basic CUDA tensor operations: Failed - {cuda_error}")
@@ -502,7 +501,7 @@ class StartupChecker:
                 try:
                     x = torch.randn(100, 100).cuda()
                     y = torch.randn(100, 100).cuda()
-                    z = torch.mm(x, y)
+                    torch.mm(x, y)
                     print("   CUDA tensor operations: Working")
                 except Exception as cuda_op_error:
                     print(f"   CUDA tensor operations: Failed - {cuda_op_error}")
@@ -751,13 +750,13 @@ class StartupChecker:
             try:
                 # Simple tensor test
                 x = torch.tensor([1.0]).cuda()
-                y = x + 1  # Basic operation
+                x + 1  # Basic operation
                 print("     ✅ CUDA tensor test passed")
 
                 # More comprehensive test
                 x_large = torch.randn(100, 100).cuda()
                 y_large = torch.randn(100, 100).cuda()
-                z = torch.mm(x_large, y_large)
+                torch.mm(x_large, y_large)
                 print("     ✅ CUDA matrix operations passed")
 
                 # Test cuDNN-specific operations that might fail at runtime
@@ -765,13 +764,13 @@ class StartupChecker:
                     # Test convolution operation that uses cuDNN
                     conv_input = torch.randn(1, 3, 32, 32).cuda()
                     conv_layer = torch.nn.Conv2d(3, 16, 3, padding=1).cuda()
-                    conv_output = conv_layer(conv_input)
+                    conv_layer(conv_input)
                     print("     ✅ cuDNN convolution operations passed")
 
                     # Test batch normalization that uses cuDNN
                     bn_input = torch.randn(1, 16, 32, 32).cuda()
                     bn_layer = torch.nn.BatchNorm2d(16).cuda()
-                    bn_output = bn_layer(bn_input)
+                    bn_layer(bn_input)
                     print("     ✅ cuDNN batch normalization passed")
 
                     return True
@@ -804,7 +803,7 @@ class StartupChecker:
             # Test basic audio functionality
             sample_rate = 16000
             duration = 1.0
-            waveform = torch.randn(1, int(sample_rate * duration))
+            torch.randn(1, int(sample_rate * duration))
             return True
         except Exception as e:
             print(f"   Audio processing test failed: {e}")
@@ -1121,7 +1120,7 @@ class StartupChecker:
                     # Check if it's actually mounted (not just an empty directory)
                     try:
                         # Try to get mount information
-                        stat_info = path.stat()
+                        path.stat()
                         print(f"     {description}: {path} (mounted)")
                     except Exception as e:
                         mount_issues.append(f"{description} at {path}: {e}")
@@ -1649,6 +1648,7 @@ class TranscriptionService:
         self.batch_transcriber: BatchTranscriber | None = None
         self.processing_queue: ProcessingQueue | None = None
         self.system_monitor: SystemMonitor | None = None
+        self.health_checker: HealthChecker | None = None
         self.worker_tasks = []
 
         # Service state tracking
@@ -1665,6 +1665,9 @@ class TranscriptionService:
 
         # Initialize system monitoring
         self.system_monitor = SystemMonitor(self.config)
+
+        # Initialize health checker
+        self.health_checker = HealthChecker(self.config)
 
         initialization_time = time.time() - self.initialization_start
         self.logger.info(
@@ -1732,6 +1735,16 @@ class TranscriptionService:
             self._setup_signal_handlers()
             self.logger.debug("Signal handlers configured")
 
+            # Start health check server
+            if self.config.health_check.enabled:
+                health_start = time.time()
+                self.health_checker.update_service_status("starting",
+                                                        file_monitor_running=False,
+                                                        transcriber_initialized=False)
+                await self.health_checker.start_server()
+                health_time = time.time() - health_start
+                self.logger.info("Health check server started in %.2fs", health_time)
+
             # Start system monitoring
             await self.system_monitor.start_monitoring()
             self.logger.info("System monitoring started")
@@ -1742,6 +1755,11 @@ class TranscriptionService:
             monitor_time = time.time() - monitor_start
             self.logger.info("File monitoring started in %.2fs", monitor_time)
 
+            # Update health status
+            self.health_checker.update_service_status("running",
+                                                     file_monitor_running=True,
+                                                     transcriber_initialized=True)
+
             # Start processing workers
             worker_start = time.time()
             await self._start_workers()
@@ -1750,11 +1768,11 @@ class TranscriptionService:
 
             self._running = True
 
+            # Mark service as ready
+            self.health_checker.update_service_status("ready")
+
             total_startup_time = time.time() - service_startup_start
-            self.logger.info(
-                "✅ TranscriptionService started successfully in %.2fs",
-                total_startup_time,
-            )
+            self.logger.info("✅ TranscriptionService started successfully in %.2fs", total_startup_time)
 
             # Log initial statistics and status
             self._log_service_status()
@@ -1762,14 +1780,15 @@ class TranscriptionService:
 
         except Exception:
             startup_time = time.time() - service_startup_start
-            self.logger.exception(
-                "❌ Failed to start TranscriptionService after %.2fs", startup_time,
-            )
+            self.logger.exception("❌ Failed to start TranscriptionService after %.2fs", startup_time)
             await self.stop()
             raise
 
     async def _initialize_components(self) -> None:
         """Initialize service components."""
+        # Pre-check CUDA/cuDNN setup to catch issues early
+        self._pre_check_cuda_setup()
+
         # Create processing queue
         queue_start = time.time()
         self.processing_queue = ProcessingQueue(
@@ -1778,11 +1797,13 @@ class TranscriptionService:
         queue_time = time.time() - queue_start
         self.logger.debug("Processing queue initialized in %.3fs", queue_time)
 
+        # Connect health checker to processing queue
+        self.health_checker.set_processing_queue_ref(self.processing_queue)
+
         # Create file monitor
         monitor_start = time.time()
         self.file_monitor = FileMonitor(
-            config=self.config,
-            callback=self._on_file_detected,
+            config=self.config, callback=self._on_file_detected,
         )
         monitor_time = time.time() - monitor_start
         self.logger.debug("File monitor initialized in %.3fs", monitor_time)
@@ -1795,6 +1816,57 @@ class TranscriptionService:
         self.logger.info("Batch transcriber initialized in %.2fs", transcriber_time)
 
         self.logger.info("All components initialized successfully")
+
+    def _pre_check_cuda_setup(self) -> None:
+        """Pre-check CUDA/cuDNN setup to catch issues early."""
+        try:
+            import torch
+
+            # Skip check if using CPU explicitly
+            if self.config.transcription.whisper.device == "cpu":
+                self.logger.info("Using CPU device explicitly - skipping CUDA checks")
+                return
+
+            # Check basic CUDA availability
+            if not torch.cuda.is_available():
+                self.logger.warning("CUDA not available - will use CPU fallback")
+                return
+
+            # Check cuDNN availability
+            if not torch.backends.cudnn.enabled or not torch.backends.cudnn.is_available():
+                self.logger.warning("cuDNN not available - will use CPU fallback or reduced GPU performance")
+                return
+
+            self.logger.info("CUDA and cuDNN pre-check passed")
+
+            # Test basic cuDNN operations that might fail
+            try:
+                # Test convolution operation that uses cuDNN
+                test_input = torch.randn(1, 3, 32, 32).cuda()
+                conv_layer = torch.nn.Conv2d(3, 16, 3, padding=1).cuda()
+                _ = conv_layer(test_input)
+
+                # Clean up test tensors
+                del test_input, conv_layer
+                torch.cuda.empty_cache()
+
+                self.logger.info("cuDNN operations pre-check passed")
+
+            except Exception as cudnn_test_error:
+                error_msg = str(cudnn_test_error).lower()
+                if "libcudnn" in error_msg or "cudnn" in error_msg:
+                    self.logger.warning(
+                        "cuDNN pre-check failed - will attempt fallback during model loading: %s",
+                        cudnn_test_error,
+                    )
+                else:
+                    self.logger.warning(
+                        "GPU operations pre-check failed - will use CPU fallback: %s",
+                        cudnn_test_error,
+                    )
+
+        except Exception as e:
+            self.logger.warning("CUDA pre-check failed: %s", e)
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
@@ -1820,8 +1892,7 @@ class TranscriptionService:
 
         for i in range(num_workers):
             worker_task = asyncio.create_task(
-                self._processing_worker(worker_id=i),
-                name=f"worker-{i}",
+                self._processing_worker(worker_id=i), name=f"worker-{i}",
             )
             self.worker_tasks.append(worker_task)
 
@@ -1849,8 +1920,7 @@ class TranscriptionService:
                 # Get next file from queue (with timeout to allow shutdown)
                 try:
                     file_path = await asyncio.wait_for(
-                        self.processing_queue.get(),
-                        timeout=1.0,
+                        self.processing_queue.get(), timeout=1.0,
                     )
                 except TimeoutError:
                     continue
@@ -1864,24 +1934,31 @@ class TranscriptionService:
 
                 # Process the file
                 processing_start = time.time()
-                try:
 
+                try:
+                    # Create progress callback for this file
                     def progress_callback(progress: ProcessingProgress) -> None:
+                        """Handle progress updates for file processing."""
                         worker_logger.debug(
-                            "Worker %s Progress: %s - %.1f%% - %s",
+                            "Worker %s progress for %s: %s (%.1f%%)",
                             worker_id,
+                            file_path.name,
                             progress.stage,
-                            progress.progress,
-                            progress.message,
+                            progress.percentage,
                         )
 
+                        # Update last activity timestamp
+                        self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
+                        worker_stats["last_activity"] = time.time()
+
+                    # Process the file with progress tracking
                     result = await self.batch_transcriber.process_file(
-                        file_path=file_path,
-                        progress_callback=progress_callback,
+                        file_path, progress_callback=progress_callback,
                     )
 
                     processing_time = time.time() - processing_start
 
+                    # Handle processing result
                     if result.success:
                         worker_logger.info(
                             "✅ Worker %s successfully processed %s in %.2fs (transcription: %.2fs)",
@@ -1891,13 +1968,23 @@ class TranscriptionService:
                             result.processing_time,
                         )
 
+                        # Console output regardless of log level
+                        language = "unknown"
+                        duration = 0
+                        speakers = 0
+                        if result.transcription_info:
+                            language = result.transcription_info.get("language", "unknown")
+                        if result.metadata:
+                            duration = result.metadata.get("duration", 0)
+                            speakers = result.metadata.get("num_speakers", 0)
+
+                        print(f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - {language}, {duration:.1f}s, {speakers} speakers", flush=True)
+
                         # Update statistics
                         worker_stats["files_processed"] += 1
                         worker_stats["total_processing_time"] += processing_time
                         self._processing_stats["files_completed"] += 1
-                        self._processing_stats["total_processing_time"] += (
-                            processing_time
-                        )
+                        self._processing_stats["total_processing_time"] += processing_time
 
                         # Mark file as processed in monitor
                         self.file_monitor.mark_file_processed(file_path)
@@ -1909,10 +1996,12 @@ class TranscriptionService:
                                 result.metadata.get("duration", 0),
                                 result.metadata.get("num_segments", 0),
                                 result.metadata.get("num_speakers", 0),
-                                result.transcription_info.get("language", "unknown")
-                                if result.transcription_info
-                                else "unknown",
+                                result.transcription_info.get("language", "unknown") if result.transcription_info else "unknown",
                             )
+
+                        # Print updated queue status to console
+                        await self._print_queue_count()
+
                     else:
                         worker_logger.error(
                             "❌ Worker %s failed to process %s after %.2fs: %s",
@@ -1922,40 +2011,57 @@ class TranscriptionService:
                             result.error_message,
                         )
 
+                        # Console output regardless of log level
+                        print(f"❌ Failed: {file_path.name} ({processing_time:.1f}s) - {result.error_message}", flush=True)
+
                         # Update failure statistics
                         worker_stats["files_failed"] += 1
                         self._processing_stats["files_failed"] += 1
+
+                        # Print updated queue status to console
+                        await self._print_queue_count()
 
                 except Exception as e:
                     processing_time = time.time() - processing_start
                     worker_logger.exception(
                         "💥 Worker %s unexpected error processing %s after %.2fs: %s",
-                        worker_id,
-                        file_path.name,
-                        processing_time,
-                        e,
+                        worker_id, file_path.name, processing_time, e,
                     )
+
+                    # Console output regardless of log level
+                    print(f"💥 Error: {file_path.name} ({processing_time:.1f}s) - {e!s}", flush=True)
+
                     worker_stats["files_failed"] += 1
                     self._processing_stats["files_failed"] += 1
 
+                    # Print updated queue status to console
+                    await self._print_queue_count()
+
                 finally:
-                    # Mark task as done
+                    # Mark task as done in queue
                     await self.processing_queue.mark_done(file_path)
 
             except asyncio.CancelledError:
                 worker_logger.info("Worker %s cancelled", worker_id)
                 break
             except Exception:
-                worker_logger.exception("Error in worker %s", worker_id)
-                await asyncio.sleep(1.0)  # Brief pause before continuing
+                worker_logger.exception("Worker %s encountered unexpected error", worker_id)
+                # Brief pause before retrying to prevent tight error loop
+                await asyncio.sleep(1.0)
 
         # Log final worker statistics
+        total_time = worker_stats["total_processing_time"]
+        files_processed = worker_stats["files_processed"]
+        avg_time = total_time / files_processed if files_processed > 0 else 0
+
         worker_logger.info(
-            "Processing worker %s stopped - Processed: %d, Failed: %d, Total time: %.2fs",
+            "Worker %s finished - Processed: %d files, Failed: %d files, "
+            "Total time: %.2fs, Average: %.2fs per file",
             worker_id,
-            worker_stats["files_processed"],
+            files_processed,
             worker_stats["files_failed"],
-            worker_stats["total_processing_time"],
+            total_time,
+            avg_time,
         )
 
     def _on_file_detected(self, file_path: Path) -> None:
@@ -1981,21 +2087,54 @@ class TranscriptionService:
                 file_size_mb,
             )
 
-            # Log queue status
-            asyncio.create_task(self._log_queue_status())
+            # Console output regardless of log level
+            print(f"📁 Queued: {file_path.name} ({file_size_mb:.1f} MB)", flush=True)
+
+            # Log queue status and print files waiting count
+            asyncio.create_task(self._log_queue_status_and_count())
 
         except Exception:
             self.logger.exception("❌ Failed to queue file %s", file_path)
 
-    async def wait_for_completion(self) -> None:
-        """Wait for service shutdown."""
+    async def _log_queue_status(self) -> None:
+        """Log current processing queue status."""
         try:
-            # Wait for shutdown signal
-            await self._shutdown_event.wait()
-        except KeyboardInterrupt:
-            self.logger.info("Received keyboard interrupt")
-        finally:
-            await self.stop()
+            if self.processing_queue:
+                status = await self.processing_queue.get_status()
+                self.logger.info(
+                    "📦 Queue status: %d queued, %d processing, %d max",
+                    status["queued"],
+                    status["processing"],
+                    status["max_size"],
+                )
+        except Exception:
+            self.logger.exception("Error getting queue status")
+
+    async def _log_queue_status_and_count(self) -> None:
+        """Log queue status and print files waiting count to console."""
+        try:
+            await self._log_queue_status()
+
+            if self.processing_queue:
+                status = await self.processing_queue.get_status()
+                # Console output regardless of log level
+                print(f"📋 Files waiting: {status['queued']}, Processing: {status['processing']}", flush=True)
+        except Exception:
+            self.logger.exception("Error logging queue status and count")
+
+    async def _print_queue_count(self) -> None:
+        """Print current queue count to console regardless of log level."""
+        try:
+            if self.processing_queue:
+                status = await self.processing_queue.get_status()
+                print(f"📋 Queue: {status['queued']} waiting, {status['processing']} processing", flush=True)
+        except Exception:
+            # Don't log exceptions for console output helper
+            pass
+
+    async def wait_for_completion(self) -> None:
+        """Wait for service shutdown completion."""
+        await self._shutdown_event.wait()
 
     async def stop(self) -> None:
         """Stop the transcription service gracefully."""
@@ -2007,10 +2146,21 @@ class TranscriptionService:
         self._running = False
 
         try:
+            # Update health status
+            if self.health_checker:
+                self.health_checker.update_service_status("stopping")
+
             # Stop system monitoring
             if self.system_monitor:
                 await self.system_monitor.stop_monitoring()
                 self.logger.info("System monitoring stopped")
+
+            # Stop health check server
+            if self.health_checker:
+                health_stop_start = time.time()
+                await self.health_checker.stop_server()
+                health_stop_time = time.time() - health_stop_start
+                self.logger.info("Health check server stopped in %.2fs", health_stop_time)
 
             # Stop file monitoring
             if self.file_monitor:
@@ -2022,9 +2172,7 @@ class TranscriptionService:
             # Cancel all worker tasks
             if self.worker_tasks:
                 worker_stop_start = time.time()
-                self.logger.info(
-                    "Cancelling %d worker tasks...", len(self.worker_tasks),
-                )
+                self.logger.info("Cancelling %d worker tasks...", len(self.worker_tasks))
 
                 for task in self.worker_tasks:
                     task.cancel()
@@ -2039,9 +2187,7 @@ class TranscriptionService:
                 cleanup_start = time.time()
                 await self.batch_transcriber.cleanup()
                 cleanup_time = time.time() - cleanup_start
-                self.logger.info(
-                    "Batch transcriber cleanup completed in %.2fs", cleanup_time,
-                )
+                self.logger.info("Batch transcriber cleanup completed in %.2fs", cleanup_time)
 
             # Log final statistics
             self._log_final_statistics()
@@ -2124,20 +2270,6 @@ class TranscriptionService:
 
         except Exception:
             self.logger.exception("Error logging runtime environment")
-
-    async def _log_queue_status(self) -> None:
-        """Log current processing queue status."""
-        try:
-            if self.processing_queue:
-                status = await self.processing_queue.get_status()
-                self.logger.debug(
-                    "Queue status - Queued: %d, Processing: %d, Max: %d",
-                    status["queued"],
-                    status["processing"],
-                    status["max_size"],
-                )
-        except Exception:
-            self.logger.exception("Error logging queue status")
 
     def _log_final_statistics(self) -> None:
         """Log final processing statistics."""
@@ -2384,7 +2516,7 @@ async def _periodic_status_logger(service: TranscriptionService, interval: int) 
 
                 if torch.cuda.is_available():
                     for i in range(torch.cuda.device_count()):
-                        allocated = torch.cuda.memory_allocated(i) / (1024**3)
+                        torch.cuda.memory_allocated(i) / (1024**3)
                         reserved = torch.cuda.memory_reserved(i) / (1024**3)
                         total = torch.cuda.get_device_properties(i).total_memory / (
                             1024**3
