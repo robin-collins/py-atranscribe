@@ -38,4 +38,3 @@ I'll help you update the `pyproject.toml` file with the latest Ruff linter setti
 
 
 ---
-

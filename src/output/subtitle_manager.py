@@ -50,15 +50,18 @@ class SubtitleManager:
         """Save transcripts in multiple formats.
 
         Args:
+        ----
             segments: List of transcript segments with timing and speaker info
             output_path: Base output path (without extension)
             formats: List of formats to generate (default: all supported)
             metadata: Optional metadata to include in output
 
         Returns:
+        -------
             Dict mapping format names to output file paths
 
         Raises:
+        ------
             FileSystemError: If file writing fails
 
         """
@@ -79,55 +82,71 @@ class SubtitleManager:
 
         for format_name in formats:
             try:
-                if format_name.lower() == "srt":
-                    file_path = self._save_srt(
-                        transcript_segments,
-                        output_path.with_suffix(".srt"),
-                    )
-                elif format_name.lower() == "webvtt":
-                    file_path = self._save_webvtt(
-                        transcript_segments,
-                        output_path.with_suffix(".vtt"),
-                    )
-                elif format_name.lower() == "txt":
-                    file_path = self._save_txt(
-                        transcript_segments,
-                        output_path.with_suffix(".txt"),
-                    )
-                elif format_name.lower() == "json":
-                    file_path = self._save_json(
-                        transcript_segments,
-                        output_path.with_suffix(".json"),
-                        metadata,
-                    )
-                elif format_name.lower() == "tsv":
-                    file_path = self._save_tsv(
-                        transcript_segments,
-                        output_path.with_suffix(".tsv"),
-                    )
-                elif format_name.lower() == "lrc":
-                    file_path = self._save_lrc(
-                        transcript_segments,
-                        output_path.with_suffix(".lrc"),
-                    )
-                else:
-                    self.logger.warning("Unsupported format: %s", format_name)
-                    continue
-
-                saved_files[format_name] = file_path
-                self.logger.debug(
-                    f"Saved {format_name.upper()} transcript: {file_path}",
+                file_path = self._save_single_format(
+                    transcript_segments, output_path, format_name, metadata
                 )
+                if file_path:
+                    saved_files[format_name] = file_path
+                    self.logger.debug(
+                        "Saved %s transcript: %s",
+                        format_name.upper(),
+                        file_path,
+                    )
 
             except Exception as e:
-                self.logger.exception(f"Failed to save {format_name} format: {e}")
+                self.logger.exception("Failed to save %s format: %s", format_name, e)
                 msg = f"Failed to save {format_name} format: {e}"
                 raise FileSystemError(msg, str(output_path)) from e
 
         self.logger.info(
-            f"Saved transcripts in {len(saved_files)} formats: {list(saved_files.keys())}",
+            "Saved transcripts in %d formats: %s",
+            len(saved_files),
+            list(saved_files.keys()),
         )
         return saved_files
+
+    def _save_single_format(
+        self,
+        transcript_segments: list[TranscriptSegment],
+        output_path: Path,
+        format_name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> Path | None:
+        """Save transcript in a single format.
+
+        Args:
+        ----
+            transcript_segments: List of transcript segments
+            output_path: Base output path (without extension)
+            format_name: Format to save (srt, webvtt, txt, json, tsv, lrc)
+            metadata: Optional metadata to include
+
+        Returns:
+        -------
+            Path to saved file or None if format not supported
+
+        """
+        format_lower = format_name.lower()
+
+        if format_lower == "srt":
+            return self._save_srt(transcript_segments, output_path.with_suffix(".srt"))
+        elif format_lower == "webvtt":
+            return self._save_webvtt(
+                transcript_segments, output_path.with_suffix(".vtt")
+            )
+        elif format_lower == "txt":
+            return self._save_txt(transcript_segments, output_path.with_suffix(".txt"))
+        elif format_lower == "json":
+            return self._save_json(
+                transcript_segments, output_path.with_suffix(".json"), metadata
+            )
+        elif format_lower == "tsv":
+            return self._save_tsv(transcript_segments, output_path.with_suffix(".tsv"))
+        elif format_lower == "lrc":
+            return self._save_lrc(transcript_segments, output_path.with_suffix(".lrc"))
+        else:
+            self.logger.warning("Unsupported format: %s", format_name)
+            return None
 
     def _convert_segments(
         self,
@@ -355,9 +374,11 @@ class SubtitleManager:
         """Generate a summary of the transcript.
 
         Args:
+        ----
             segments: List of transcript segments
 
         Returns:
+        -------
             Dict with transcript statistics and summary
 
         """
@@ -416,10 +437,12 @@ class SubtitleManager:
         """Merge very short segments with adjacent segments to improve readability.
 
         Args:
+        ----
             segments: List of segments to merge
             min_duration: Minimum segment duration in seconds
 
         Returns:
+        -------
             List of merged segments
 
         """
@@ -472,7 +495,9 @@ class SubtitleManager:
             merged_segments.append(current_segment)
 
         self.logger.debug(
-            f"Merged {len(segments)} segments into {len(merged_segments)} segments",
+            "Merged %d segments into %d segments",
+            len(segments),
+            len(merged_segments),
         )
         return merged_segments
 
@@ -484,10 +509,12 @@ class SubtitleManager:
         """Filter out segments with very low confidence scores.
 
         Args:
+        ----
             segments: List of segments to filter
             min_confidence: Minimum confidence threshold
 
         Returns:
+        -------
             List of filtered segments
 
         """
@@ -503,10 +530,13 @@ class SubtitleManager:
                 filtered_segments.append(segment)
             else:
                 self.logger.debug(
-                    f"Filtered low confidence segment: {confidence:.3f} < {min_confidence}",
+                    "Filtered low confidence segment: %.3f < %.3f",
+                    confidence,
+                    min_confidence,
                 )
 
         self.logger.debug(
-            f"Filtered {len(segments) - len(filtered_segments)} low confidence segments",
+            "Filtered %d low confidence segments",
+            len(segments) - len(filtered_segments),
         )
         return filtered_segments

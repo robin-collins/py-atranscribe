@@ -21,6 +21,8 @@ classifiers = [
 ]
 license = {text = "MIT"}
 dependencies = [
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
     # Core transcription and diarization
     "faster-whisper>=1.1.1",
     "pyannote.audio>=3.3.2",
@@ -49,6 +51,7 @@ dependencies = [
     # Logging and monitoring
     "structlog>=23.1.0",
     "prometheus-client>=0.17.0",
+    "ruff>=0.12.1",
 ]
 
 [project.optional-dependencies]
@@ -81,7 +84,40 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["E501", "F401", "T201"]
+ignore = [
+    "E501",     # Line too long
+    "F401",     # Unused import
+    "T201",     # Print statement
+    "D203",     # One blank line required before class docstring
+    "D213",     # Multi-line docstring summary should start at the second line
+    "COM812",   # Missing trailing comma
+    # User-requested exclusions
+    "SLF001",   # Private member accessed
+    "ARG002",   # Unused method argument
+    "ANN401",   # Dynamically typed expressions (typing.Any) are disallowed
+    "PLC0415",  # Import should be placed at the top of the module
+    "RET505",   # Unnecessary `else` after `return` statement
+    "TRY401",   # Redundant exception types in `except` clause
+    "D204",     # One blank line required after class docstring
+    "PLR0913",  # Too many arguments in function definition
+    "FBT001",   # Boolean positional arg in function definition
+    "FBT002",   # Boolean default positional argument in function definition
+    "I001",     # Import block is un-sorted or un-formatted
+    "N806",     # Variable in function should be lowercase
+    "PIE790",   # Unnecessary `pass` statement
+    "PLR0911",  # Too many return statements
+    "RUF100",   # Unused `noqa` directive
+    "D205",     # One blank line required between summary line and description
+    "D401",     # First line should be in imperative mood
+    "N803",     # Argument name should be lowercase
+    "N818",     # Exception name should be named with an Error suffix
+    "PERF401",  # Use a list comprehension to create a transformed list
+    "SIM103",   # Return the condition directly
+    "D200",     # One-line docstring should fit on one line
+    "EM101",    # Exception must not use a string literal, assign to variable first
+    "TRY003",   # Avoid specifying long messages outside the exception class
+    "UP024",    # Replace aliased errors with `OSError`
+]
 fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
@@ -91,3 +127,16 @@ fixable = ["ALL"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]

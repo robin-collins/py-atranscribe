@@ -8,7 +8,7 @@ import contextlib
 import gc
 import logging
 import os
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 import torch
 from faster_whisper import WhisperModel
@@ -46,7 +46,7 @@ class WhisperFactory:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 gc.collect()
-            except Exception as e:
+            except (RuntimeError, AttributeError) as e:
                 logging.getLogger(__name__).warning("Error clearing model cache: %s", e)
 
         cls._instances.clear()
@@ -56,7 +56,8 @@ class WhisperFactory:
     def get_optimal_device(cls) -> str:
         """Determine the optimal device for inference.
 
-        Returns:
+        Returns
+        -------
             str: Device string ("cuda", "cpu")
 
         """
@@ -83,12 +84,13 @@ class WhisperFactory:
                     "GPU has insufficient memory (%.1fGB), using CPU",
                     gpu_memory_gb,
                 )
-                return "cpu"
             except RuntimeError as e:
                 logging.getLogger(__name__).warning(
                     "Error checking GPU memory, using CPU: %s",
                     e,
                 )
+            else:
+                return "cpu"
 
         cls._device_cache = "cpu"
         logging.getLogger(__name__).info("Using CPU device for inference")
@@ -99,10 +101,12 @@ class WhisperFactory:
         """Determine the optimal compute type for the given device.
 
         Args:
+        ----
             device: Target device ("cuda", "cpu")
             requested_type: Requested compute type ("auto", "int8", "int16", "float16", "float32")
 
         Returns:
+        -------
             str: Optimal compute type
 
         """
@@ -124,12 +128,15 @@ class WhisperFactory:
         """Create a FasterWhisperInference instance with the given configuration.
 
         Args:
+        ----
             config: Whisper configuration
 
         Returns:
+        -------
             FasterWhisperInference: Configured inference instance
 
         Raises:
+        ------
             ModelError: If model creation fails
 
         """
@@ -161,40 +168,84 @@ class WhisperFactory:
 
                 # Create model with comprehensive error handling
                 model = self._create_model_with_fallback(
-                    model_size, device, compute_type, config
+                    model_size,
+                    device,
+                    compute_type,
+                    config,
                 )
 
                 if model:
                     self._instances[cache_key] = model
                     self.logger.info(
-                        "Successfully created Whisper model: %s", cache_key
+                        "Successfully created Whisper model: %s",
+                        cache_key,
                     )
                 else:
-                    raise ModelError(
-                        "Failed to create Whisper model after all fallback attempts"
-                    )
+                    self._raise_model_creation_error()
 
             # Wrap in inference class with error handling
             return FasterWhisperInference(model, config, self.logger)
 
         except Exception as e:
-            self.logger.error("Failed to create Whisper inference: %s", e)
-            raise ModelError(f"Whisper inference creation failed: {e}") from e
+            self.logger.exception("Failed to create Whisper inference: %s", e)
+            msg = f"Whisper inference creation failed: {e}"
+            raise ModelError(msg) from e
+
+    def _raise_model_creation_error(self) -> None:
+        """Raise ModelError for failed model creation."""
+        msg = "Failed to create Whisper model after all fallback attempts"
+        raise ModelError(msg)
 
     def _create_model_with_fallback(
-        self, model_size: str, device: str, compute_type: str, config: WhisperConfig
+        self,
+        model_size: str,
+        device: str,
+        compute_type: str,
+        config: WhisperConfig,
     ) -> WhisperModel | None:
         """Create WhisperModel with comprehensive fallback handling.
 
         Args:
+        ----
             model_size: Model size to load
             device: Target device
             compute_type: Compute type
             config: Whisper configuration
 
         Returns:
+        -------
             WhisperModel instance or None if all attempts fail
+
         """
+        # Build fallback attempt configurations
+        fallback_attempts = self._build_fallback_attempts(device, compute_type, config)
+
+        # Try each fallback configuration
+        for attempt_device, attempt_compute_type in fallback_attempts:
+            model = self._attempt_model_creation(
+                model_size, attempt_device, attempt_compute_type, config
+            )
+            if model:
+                # Check if we had to fallback and update degradation
+                if (attempt_device, attempt_compute_type) != (device, compute_type):
+                    graceful_degradation.increase_degradation()
+                    self.logger.warning(
+                        "Model creation required fallback from %s/%s to %s/%s",
+                        device,
+                        compute_type,
+                        attempt_device,
+                        attempt_compute_type,
+                    )
+                return model
+
+        # All attempts failed
+        self.logger.error("All model creation attempts failed")
+        return None
+
+    def _build_fallback_attempts(
+        self, device: str, compute_type: str, config: WhisperConfig
+    ) -> list[tuple[str, str]]:
+        """Build list of fallback attempts based on device type."""
         # Define fallback chain - prioritize GPU configurations for CUDA users
         fallback_attempts = [
             (device, compute_type),  # Original request
@@ -208,9 +259,7 @@ class WhisperFactory:
                     ("cuda", "float32"),  # Try float32 (often more stable than float16)
                     ("cuda", "float16"),  # Try float16 for memory efficiency
                     ("cuda", "int8"),  # Try int8 for memory-constrained GPUs
-                    # Only fall back to CPU if user hasn't explicitly configured CUDA
-                    # Check if user explicitly set device or compute_type in config
-                ]
+                ],
             )
 
             # Only add CPU fallback if user didn't explicitly configure CUDA
@@ -219,11 +268,11 @@ class WhisperFactory:
                     [
                         ("cpu", "int8"),  # CPU fallback only for auto config
                         ("cpu", "float32"),  # CPU with float32
-                    ]
+                    ],
                 )
             else:
                 self.logger.info(
-                    "User explicitly configured CUDA - skipping CPU fallback"
+                    "User explicitly configured CUDA - skipping CPU fallback",
                 )
 
         elif device == "cpu":
@@ -231,7 +280,7 @@ class WhisperFactory:
                 [
                     ("cpu", "float32"),  # Try float32 if int8 fails
                     ("cpu", "int16"),  # Try int16
-                ]
+                ],
             )
         else:
             # For other devices (mps, xpu), add CPU fallback
@@ -245,115 +294,111 @@ class WhisperFactory:
                 seen.add(attempt)
                 unique_attempts.append(attempt)
 
-        # Try each fallback configuration
-        for attempt_device, attempt_compute_type in unique_attempts:
-            try:
-                self.logger.info(
-                    "Attempting to create model with device=%s, compute_type=%s",
-                    attempt_device,
-                    attempt_compute_type,
-                )
+        return unique_attempts
 
-                model_kwargs = {
-                    "model_size_or_path": model_size,
-                    "device": attempt_device,
-                    "compute_type": attempt_compute_type,
-                    "cpu_threads": config.cpu_threads
-                    if config.cpu_threads > 0
-                    else os.cpu_count(),
-                    "num_workers": config.num_workers,
-                }
+    def _attempt_model_creation(
+        self, model_size: str, device: str, compute_type: str, config: WhisperConfig
+    ) -> WhisperModel | None:
+        """Attempt to create model with specific configuration."""
+        try:
+            self.logger.info(
+                "Attempting to create model with device=%s, compute_type=%s",
+                device,
+                compute_type,
+            )
 
-                # Add GPU-specific optimizations
-                if attempt_device == "cuda":
-                    model_kwargs.update(
-                        {
-                            "device_index": 0,  # Use first GPU
-                        }
-                    )
+            model_kwargs = {
+                "model_size_or_path": model_size,
+                "device": device,
+                "compute_type": compute_type,
+                "cpu_threads": config.cpu_threads
+                if config.cpu_threads > 0
+                else os.cpu_count(),
+                "num_workers": config.num_workers,
+            }
 
-                # Create the model with cuDNN error handling
-                model = self._create_model_with_cudnn_handling(
-                    model_kwargs, attempt_device, attempt_compute_type
-                )
+            # Add GPU-specific optimizations
+            if device == "cuda":
+                model_kwargs.update({"device_index": 0})  # Use first GPU
 
-                # Test the model with a simple operation to catch runtime cuDNN errors
-                self._test_model_runtime(model, attempt_device)
+            # Create the model with cuDNN error handling
+            model = self._create_model_with_cudnn_handling(
+                model_kwargs, device, compute_type
+            )
 
-                self.logger.info(
-                    "Successfully created and tested model with device=%s, compute_type=%s",
-                    attempt_device,
-                    attempt_compute_type,
-                )
+            # Test the model with a simple operation to catch runtime cuDNN errors
+            self._test_model_runtime(model, device)
 
-                # Update graceful degradation if we had to fallback
-                if (attempt_device, attempt_compute_type) != (device, compute_type):
-                    graceful_degradation.increase_degradation()
-                    self.logger.warning(
-                        "Model creation required fallback from %s/%s to %s/%s",
-                        device,
-                        compute_type,
-                        attempt_device,
-                        attempt_compute_type,
-                    )
+            self.logger.info(
+                "Successfully created and tested model with device=%s, compute_type=%s",
+                device,
+                compute_type,
+            )
 
-                return model
+        except (RuntimeError, OSError, ImportError, ValueError) as e:
+            self._log_model_creation_error(e, device, compute_type)
+            return None
+        else:
+            return model
 
-            except Exception as e:
-                error_msg = str(e).lower()
+    def _log_model_creation_error(
+        self, error: Exception, device: str, compute_type: str
+    ) -> None:
+        """Log model creation error with specific error type information."""
+        error_msg = str(error).lower()
 
-                # Log specific error types for debugging
-                if "libcudnn" in error_msg or "cudnn" in error_msg:
-                    self.logger.warning(
-                        "cuDNN library error with device=%s, compute_type=%s: %s",
-                        attempt_device,
-                        attempt_compute_type,
-                        e,
-                    )
-                elif "out of memory" in error_msg:
-                    self.logger.warning(
-                        "GPU memory error with device=%s, compute_type=%s: %s",
-                        attempt_device,
-                        attempt_compute_type,
-                        e,
-                    )
-                elif "cuda" in error_msg and "not available" in error_msg:
-                    self.logger.warning(
-                        "CUDA not available with device=%s, compute_type=%s: %s",
-                        attempt_device,
-                        attempt_compute_type,
-                        e,
-                    )
-                else:
-                    self.logger.warning(
-                        "Model creation failed with device=%s, compute_type=%s: %s",
-                        attempt_device,
-                        attempt_compute_type,
-                        e,
-                    )
-
-                # Continue to next fallback
-                continue
-
-        # All attempts failed
-        self.logger.error("All model creation attempts failed")
-        return None
+        # Log specific error types for debugging
+        if "libcudnn" in error_msg or "cudnn" in error_msg:
+            self.logger.warning(
+                "cuDNN library error with device=%s, compute_type=%s: %s",
+                device,
+                compute_type,
+                error,
+            )
+        elif "out of memory" in error_msg:
+            self.logger.warning(
+                "GPU memory error with device=%s, compute_type=%s: %s",
+                device,
+                compute_type,
+                error,
+            )
+        elif "cuda" in error_msg and "not available" in error_msg:
+            self.logger.warning(
+                "CUDA not available with device=%s, compute_type=%s: %s",
+                device,
+                compute_type,
+                error,
+            )
+        else:
+            self.logger.warning(
+                "Model creation failed with device=%s, compute_type=%s: %s",
+                device,
+                compute_type,
+                error,
+            )
 
     def _create_model_with_cudnn_handling(
-        self, model_kwargs: dict, device: str, compute_type: str
+        self,
+        model_kwargs: dict,
+        device: str,
+        compute_type: str,
     ) -> WhisperModel:
         """Create WhisperModel with specific cuDNN error handling.
 
         Args:
+        ----
             model_kwargs: Model creation arguments
             device: Target device
             compute_type: Compute type
 
         Returns:
+        -------
             WhisperModel instance
 
         Raises:
+        ------
             Exception: If model creation fails
+
         """
         try:
             # First attempt: Normal model creation
@@ -365,124 +410,157 @@ class WhisperFactory:
             # Handle cuDNN-specific errors
             if "libcudnn" in error_msg or "cudnn" in error_msg:
                 self.logger.warning(
-                    "cuDNN error detected, trying cuDNN workarounds: %s", e
+                    "cuDNN error detected, trying cuDNN workarounds: %s",
+                    e,
                 )
 
-                # Try with cuDNN-specific environment variables
-                import os
-
-                original_env = {}
-
-                try:
-                    # Save original environment
-                    cudnn_env_vars = [
-                        "CUDNN_LOGINFO_DBG",
-                        "CUDNN_LOGERR_DBG",
-                        "CUDNN_LOGWARN_DBG",
-                        "CUDA_LAUNCH_BLOCKING",
-                        "PYTORCH_CUDA_ALLOC_CONF",
-                    ]
-                    for var in cudnn_env_vars:
-                        if var in os.environ:
-                            original_env[var] = os.environ[var]
-
-                    # Set cuDNN debugging and optimization environment variables
-                    os.environ["CUDNN_LOGINFO_DBG"] = "0"
-                    os.environ["CUDNN_LOGERR_DBG"] = "1"
-                    os.environ["CUDNN_LOGWARN_DBG"] = "1"
-                    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-                    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
-                        "max_split_size_mb:512,expandable_segments:True"
-                    )
-
-                    self.logger.info(
-                        "Retrying model creation with cuDNN environment variables"
-                    )
-                    model = WhisperModel(**model_kwargs)
-
-                    self.logger.info(
-                        "Successfully created model with cuDNN workarounds"
-                    )
+                # Try cuDNN workarounds in sequence
+                model = self._try_cudnn_workarounds(model_kwargs)
+                if model:
                     return model
 
-                except Exception as cudnn_retry_error:
-                    self.logger.warning(
-                        "cuDNN workaround failed: %s", cudnn_retry_error
-                    )
-
-                finally:
-                    # Restore original environment
-                    for var in cudnn_env_vars:
-                        if var in original_env:
-                            os.environ[var] = original_env[var]
-                        elif var in os.environ:
-                            del os.environ[var]
-
-                # If cuDNN workarounds failed, try disabling cuDNN
-                try:
-                    self.logger.info("Trying to create model with cuDNN disabled")
-
-                    # Temporarily disable cuDNN
-                    import torch
-
-                    original_cudnn_enabled = torch.backends.cudnn.enabled
-                    torch.backends.cudnn.enabled = False
-
-                    try:
-                        model = WhisperModel(**model_kwargs)
-                        self.logger.warning(
-                            "Successfully created model with cuDNN disabled - "
-                            "performance may be reduced"
-                        )
-                        return model
-                    finally:
-                        # Restore cuDNN setting
-                        torch.backends.cudnn.enabled = original_cudnn_enabled
-
-                except Exception as no_cudnn_error:
-                    self.logger.warning(
-                        "Model creation failed even with cuDNN disabled: %s",
-                        no_cudnn_error,
-                    )
-
-                # If GPU still fails, try forcing CPU mode for this specific cuDNN error
-                try:
-                    self.logger.info(
-                        "cuDNN issues detected, trying CPU fallback as last resort"
-                    )
-                    cpu_kwargs = model_kwargs.copy()
-                    cpu_kwargs.update(
-                        {
-                            "device": "cpu",
-                            "compute_type": "int8",  # Use int8 for better CPU performance
-                        }
-                    )
-
-                    model = WhisperModel(**cpu_kwargs)
-                    self.logger.warning(
-                        "Successfully created model on CPU due to cuDNN issues - "
-                        "performance will be significantly reduced"
-                    )
+                model = self._try_cudnn_disabled(model_kwargs)
+                if model:
                     return model
 
-                except Exception as cpu_fallback_error:
-                    self.logger.error(
-                        "Even CPU fallback failed for cuDNN error: %s",
-                        cpu_fallback_error,
-                    )
+                model = self._try_cpu_fallback_for_cudnn(model_kwargs)
+                if model:
+                    return model
 
             # Re-raise the original exception if cuDNN workarounds didn't help
             raise
+
+    def _try_cudnn_workarounds(self, model_kwargs: dict) -> WhisperModel | None:
+        """Try cuDNN workarounds with environment variables."""
+        import os
+
+        original_env = {}
+
+        try:
+            # Save original environment
+            cudnn_env_vars = [
+                "CUDNN_LOGINFO_DBG",
+                "CUDNN_LOGERR_DBG",
+                "CUDNN_LOGWARN_DBG",
+                "CUDA_LAUNCH_BLOCKING",
+                "PYTORCH_CUDA_ALLOC_CONF",
+            ]
+            for var in cudnn_env_vars:
+                if var in os.environ:
+                    original_env[var] = os.environ[var]
+
+            # Set cuDNN debugging and optimization environment variables
+            os.environ["CUDNN_LOGINFO_DBG"] = "0"
+            os.environ["CUDNN_LOGERR_DBG"] = "1"
+            os.environ["CUDNN_LOGWARN_DBG"] = "1"
+            os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
+                "max_split_size_mb:512,expandable_segments:True"
+            )
+
+            self.logger.info(
+                "Retrying model creation with cuDNN environment variables",
+            )
+            model = WhisperModel(**model_kwargs)
+
+            self.logger.info(
+                "Successfully created model with cuDNN workarounds",
+            )
+
+        except (RuntimeError, OSError, ImportError, ValueError) as cudnn_retry_error:
+            self.logger.warning(
+                "cuDNN workaround failed: %s",
+                cudnn_retry_error,
+            )
+            return None
+        else:
+            return model
+
+        finally:
+            # Restore original environment
+            cudnn_env_vars = [
+                "CUDNN_LOGINFO_DBG",
+                "CUDNN_LOGERR_DBG",
+                "CUDNN_LOGWARN_DBG",
+                "CUDA_LAUNCH_BLOCKING",
+                "PYTORCH_CUDA_ALLOC_CONF",
+            ]
+            for var in cudnn_env_vars:
+                if var in original_env:
+                    os.environ[var] = original_env[var]
+                elif var in os.environ:
+                    del os.environ[var]
+
+    def _try_cudnn_disabled(self, model_kwargs: dict) -> WhisperModel | None:
+        """Try creating model with cuDNN disabled."""
+        try:
+            self.logger.info("Trying to create model with cuDNN disabled")
+
+            # Temporarily disable cuDNN
+            import torch
+
+            original_cudnn_enabled = torch.backends.cudnn.enabled
+            torch.backends.cudnn.enabled = False
+
+            try:
+                model = WhisperModel(**model_kwargs)
+                self.logger.warning(
+                    "Successfully created model with cuDNN disabled - "
+                    "performance may be reduced",
+                )
+                return model
+            finally:
+                # Restore cuDNN setting
+                torch.backends.cudnn.enabled = original_cudnn_enabled
+
+        except (RuntimeError, OSError, ImportError, ValueError) as no_cudnn_error:
+            self.logger.warning(
+                "Model creation failed even with cuDNN disabled: %s",
+                no_cudnn_error,
+            )
+            return None
+
+    def _try_cpu_fallback_for_cudnn(self, model_kwargs: dict) -> WhisperModel | None:
+        """Try CPU fallback as last resort for cuDNN errors."""
+        try:
+            self.logger.info(
+                "cuDNN issues detected, trying CPU fallback as last resort",
+            )
+            cpu_kwargs = model_kwargs.copy()
+            cpu_kwargs.update(
+                {
+                    "device": "cpu",
+                    "compute_type": "int8",  # Use int8 for better CPU performance
+                },
+            )
+
+            model = WhisperModel(**cpu_kwargs)
+            self.logger.warning(
+                "Successfully created model on CPU due to cuDNN issues - "
+                "performance will be significantly reduced",
+            )
+
+        except Exception as cpu_fallback_error:
+            self.logger.exception(
+                "Even CPU fallback failed for cuDNN error: %s",
+                cpu_fallback_error,
+            )
+            return None
+        else:
+            return model
 
     def _test_model_runtime(self, model: WhisperModel, device: str) -> None:
         """Test model with a simple operation to catch runtime errors.
 
         Args:
+        ----
             model: WhisperModel to test
             device: Device the model is running on
 
         Raises:
+        ------
             RuntimeError: If model runtime test fails
+
         """
         try:
             # Create a minimal test audio (1 second of silence at 16kHz)
@@ -510,11 +588,13 @@ class WhisperFactory:
         except Exception as e:
             error_msg = str(e).lower()
             if "libcudnn" in error_msg or "cudnn" in error_msg:
-                raise RuntimeError(f"cuDNN runtime error: {e}") from e
-            elif "cuda" in error_msg:
-                raise RuntimeError(f"CUDA runtime error: {e}") from e
-            else:
-                raise RuntimeError(f"Model runtime test failed: {e}") from e
+                msg = f"cuDNN runtime error: {e}"
+                raise RuntimeError(msg) from e
+            if "cuda" in error_msg:
+                msg = f"CUDA runtime error: {e}"
+                raise RuntimeError(msg) from e
+            msg = f"Model runtime test failed: {e}"
+            raise RuntimeError(msg) from e
 
 
 class FasterWhisperInference:
@@ -525,11 +605,15 @@ class FasterWhisperInference:
     """
 
     def __init__(
-        self, model: WhisperModel, config: WhisperConfig, logger: logging.Logger
+        self,
+        model: WhisperModel,
+        config: WhisperConfig,
+        logger: logging.Logger,
     ) -> None:
         """Initialize FasterWhisperInference.
 
         Args:
+        ----
             model: WhisperModel instance
             config: Whisper configuration
             logger: Logger for logging messages
@@ -543,18 +627,22 @@ class FasterWhisperInference:
         self._max_runtime_errors = 3  # Max errors before forcing CPU fallback
 
     @retry_on_error()
-    def transcribe(self, audio_path: str, **kwargs) -> tuple:
+    def transcribe(self, audio_path: str, **kwargs: Any) -> tuple:
         """Transcribe audio with runtime error handling.
 
         Args:
+        ----
             audio_path: Path to audio file
             **kwargs: Additional transcription parameters
 
         Returns:
+        -------
             Tuple of (segments, transcription_info)
 
         Raises:
+        ------
             AudioProcessingError: If transcription fails after all fallback attempts
+
         """
         try:
             # Try with primary model first
@@ -569,35 +657,42 @@ class FasterWhisperInference:
                 return self._handle_cudnn_runtime_error(audio_path, **kwargs)
 
             # Handle CUDA runtime errors
-            elif "cuda" in error_msg:
+            if "cuda" in error_msg:
                 self.logger.warning("CUDA runtime error during transcription: %s", e)
                 return self._handle_cuda_runtime_error(audio_path, **kwargs)
 
             # Handle memory errors
-            elif "out of memory" in error_msg:
+            if "out of memory" in error_msg:
                 self.logger.warning("GPU memory error during transcription: %s", e)
                 return self._handle_memory_error(audio_path, **kwargs)
 
-            else:
-                # Re-raise other runtime errors
-                raise AudioProcessingError(f"Transcription runtime error: {e}") from e
+            # Re-raise other runtime errors
+            msg = f"Transcription runtime error: {e}"
+            raise AudioProcessingError(msg) from e
 
         except Exception as e:
-            self.logger.error("Unexpected error during transcription: %s", e)
-            raise AudioProcessingError(f"Transcription failed: {e}") from e
+            self.logger.exception("Unexpected error during transcription: %s", e)
+            msg = f"Transcription failed: {e}"
+            raise AudioProcessingError(msg) from e
 
     def _transcribe_with_model(
-        self, model: WhisperModel, audio_path: str, **kwargs
+        self,
+        model: WhisperModel,
+        audio_path: str,
+        **kwargs: Any,
     ) -> tuple:
         """Perform transcription with a specific model.
 
         Args:
+        ----
             model: WhisperModel to use
             audio_path: Path to audio file
             **kwargs: Transcription parameters
 
         Returns:
+        -------
             Tuple of (segments, transcription_info)
+
         """
         try:
             # Perform transcription
@@ -614,22 +709,25 @@ class FasterWhisperInference:
                 "all_language_probs": info.all_language_probs,
             }
 
-            return segments_list, transcription_info
-
         except Exception as e:
             # Log the specific error for debugging
             self.logger.debug("Transcription error with model: %s", e)
             raise
+        else:
+            return segments_list, transcription_info
 
-    def _handle_cudnn_runtime_error(self, audio_path: str, **kwargs) -> tuple:
+    def _handle_cudnn_runtime_error(self, audio_path: str, **kwargs: Any) -> tuple:
         """Handle cuDNN runtime errors with GPU-first approach.
 
         Args:
+        ----
             audio_path: Path to audio file
             **kwargs: Transcription parameters
 
         Returns:
+        -------
             Tuple of (segments, transcription_info)
+
         """
         self._runtime_errors += 1
 
@@ -649,16 +747,17 @@ class FasterWhisperInference:
 
                 self.logger.warning(
                     "Successfully transcribed with cuDNN disabled - "
-                    "GPU performance may be reduced but still using GPU"
+                    "GPU performance may be reduced but still using GPU",
                 )
                 return result
 
             finally:
                 torch.backends.cudnn.enabled = original_cudnn_enabled
 
-        except Exception as gpu_retry_error:
+        except (RuntimeError, OSError, ImportError, ValueError) as gpu_retry_error:
             self.logger.warning(
-                "GPU retry with cuDNN disabled failed: %s", gpu_retry_error
+                "GPU retry with cuDNN disabled failed: %s",
+                gpu_retry_error,
             )
 
         # Only fall back to CPU after multiple failures and if not explicitly configured for CUDA
@@ -675,11 +774,14 @@ class FasterWhisperInference:
             ):
                 self.logger.error(
                     "User explicitly configured CUDA but cuDNN errors persist. "
-                    "Please fix cuDNN installation or adjust configuration."
+                    "Please fix cuDNN installation or adjust configuration.",
                 )
-                raise AudioProcessingError(
+                msg = (
                     "cuDNN runtime errors with explicit CUDA configuration - "
                     "check cuDNN installation or use CPU explicitly"
+                )
+                raise AudioProcessingError(
+                    msg,
                 )
 
             # Create CPU fallback model if user didn't explicitly configure CUDA
@@ -690,27 +792,32 @@ class FasterWhisperInference:
             if self._fallback_model:
                 self.logger.info("Using CPU fallback model due to cuDNN runtime error")
                 return self._transcribe_with_model(
-                    self._fallback_model, audio_path, **kwargs
+                    self._fallback_model,
+                    audio_path,
+                    **kwargs,
                 )
-            else:
-                raise AudioProcessingError(
-                    "Failed to create CPU fallback model for cuDNN error"
-                )
-        else:
-            # For early errors, just re-raise to try other GPU configurations
+            msg = "Failed to create CPU fallback model for cuDNN error"
             raise AudioProcessingError(
-                f"cuDNN runtime error (attempt {self._runtime_errors})"
+                msg,
             )
+        # For early errors, just re-raise to try other GPU configurations
+        msg = f"cuDNN runtime error (attempt {self._runtime_errors})"
+        raise AudioProcessingError(
+            msg,
+        )
 
-    def _handle_cuda_runtime_error(self, audio_path: str, **kwargs) -> tuple:
+    def _handle_cuda_runtime_error(self, audio_path: str, **kwargs: Any) -> tuple:
         """Handle CUDA runtime errors with CPU fallback.
 
         Args:
+        ----
             audio_path: Path to audio file
             **kwargs: Transcription parameters
 
         Returns:
+        -------
             Tuple of (segments, transcription_info)
+
         """
         self._runtime_errors += 1
 
@@ -722,22 +829,27 @@ class FasterWhisperInference:
         if self._fallback_model:
             self.logger.info("Using CPU fallback model due to CUDA runtime error")
             return self._transcribe_with_model(
-                self._fallback_model, audio_path, **kwargs
+                self._fallback_model,
+                audio_path,
+                **kwargs,
             )
-        else:
-            raise AudioProcessingError(
-                "Failed to create CPU fallback model for CUDA error"
-            )
+        msg = "Failed to create CPU fallback model for CUDA error"
+        raise AudioProcessingError(
+            msg,
+        )
 
-    def _handle_memory_error(self, audio_path: str, **kwargs) -> tuple:
+    def _handle_memory_error(self, audio_path: str, **kwargs: Any) -> tuple:
         """Handle GPU memory errors with CPU fallback.
 
         Args:
+        ----
             audio_path: Path to audio file
             **kwargs: Transcription parameters
 
         Returns:
+        -------
             Tuple of (segments, transcription_info)
+
         """
         self._runtime_errors += 1
 
@@ -748,7 +860,7 @@ class FasterWhisperInference:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 self.logger.info("Cleared GPU memory cache")
-        except Exception:
+        except (RuntimeError, AttributeError):  # noqa: S110
             pass
 
         # Create CPU fallback model if needed
@@ -759,18 +871,22 @@ class FasterWhisperInference:
         if self._fallback_model:
             self.logger.info("Using CPU fallback model due to GPU memory error")
             return self._transcribe_with_model(
-                self._fallback_model, audio_path, **kwargs
+                self._fallback_model,
+                audio_path,
+                **kwargs,
             )
-        else:
-            raise AudioProcessingError(
-                "Failed to create CPU fallback model for memory error"
-            )
+        msg = "Failed to create CPU fallback model for memory error"
+        raise AudioProcessingError(
+            msg,
+        )
 
     def _create_cpu_fallback_model(self) -> WhisperModel | None:
         """Create a CPU fallback model.
 
-        Returns:
+        Returns
+        -------
             WhisperModel instance or None if creation fails
+
         """
         try:
             # Use the same model size but force CPU
@@ -788,11 +904,11 @@ class FasterWhisperInference:
 
             fallback_model = WhisperModel(**model_kwargs)
             self.logger.info("Successfully created CPU fallback model")
-            return fallback_model
-
         except Exception as e:
-            self.logger.error("Failed to create CPU fallback model: %s", e)
+            self.logger.exception("Failed to create CPU fallback model: %s", e)
             return None
+        else:
+            return fallback_model
 
     def cleanup(self) -> None:
         """Clean up model resources."""
@@ -811,21 +927,23 @@ class FasterWhisperInference:
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception:
+            except (RuntimeError, AttributeError):  # noqa: S110
                 pass
 
             self.logger.debug("Cleaned up WhisperModel resources")
 
-        except Exception as e:
+        except (RuntimeError, AttributeError) as e:
             self.logger.warning("Error during model cleanup: %s", e)
 
     def detect_language(self, audio_path: str) -> dict[str, Any]:
         """Detect the language of an audio file.
 
         Args:
+        ----
             audio_path: Path to audio file
 
         Returns:
+        -------
             dict containing detected language and confidence
 
         """
@@ -859,12 +977,12 @@ class FasterWhisperInference:
                 info.language_probability,
             )
 
-            return result
-
         except AudioProcessingError as e:
             self.logger.exception("Language detection failed for %s", audio_path)
             msg = f"Language detection failed: {e}"
             raise AudioProcessingError(msg, audio_path) from e
+        else:
+            return result
 
     def get_model_info(self) -> dict[str, Any]:
         """Get information about the loaded model."""

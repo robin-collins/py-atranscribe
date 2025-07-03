@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 from src.config import AppConfig
 from src.diarization.diarizer import DiarizationResult, Diarizer
@@ -19,6 +19,7 @@ from src.transcription.whisper_factory import FasterWhisperInference, WhisperFac
 from src.utils.error_handling import (
     AudioProcessingError,
     FileSystemError,
+    TranscriptionError,
     error_tracker,
     graceful_degradation,
     retry_on_error,
@@ -64,6 +65,7 @@ class BatchTranscriber:
         """Initialize BatchTranscriber with configuration.
 
         Args:
+        ----
             config: Application configuration
 
         """
@@ -116,10 +118,12 @@ class BatchTranscriber:
         """Process a single audio file through the complete pipeline.
 
         Args:
+        ----
             file_path: Path to audio file to process
             progress_callback: Optional callback for progress updates
 
         Returns:
+        -------
             ProcessingResult: Results of processing
 
         """
@@ -148,122 +152,27 @@ class BatchTranscriber:
                 f"Starting processing of {file_path.name}",
             )
 
-            # Validate input file
-            if not file_path.exists():
-                msg = f"Input file not found: {file_path}"
-                raise FileSystemError(msg)  # noqa: TRY301
+            # Validate input file and initialize
+            await self._validate_and_initialize(file_path)
 
-            if not self._whisper_inference:
-                await self.initialize()
-
-            # Stage 1: Transcription
-            report_progress("transcription", 0.1, "Starting transcription...")
-            transcription_result = await self._transcribe_audio(file_path)
-
-            if not transcription_result or not transcription_result.get("segments"):
-                self.logger.warning("No transcription results for %s", file_path)
-                return ProcessingResult(
-                    input_file=file_path,
-                    output_files={},
-                    success=False,
-                    error_message="No transcription results (silent audio or processing error)",
-                    processing_time=time.time() - start_time,
-                )
-
-            report_progress(
-                "transcription",
-                0.4,
-                f"Transcription completed: {len(transcription_result['segments'])} segments",
-            )
-
-            # Stage 2: Diarization (if enabled)
-            diarization_result = None
-            if (
-                self.config.diarization.enabled
-                and not graceful_degradation.should_disable_feature("diarization")
-            ):
-                report_progress("diarization", 0.5, "Starting speaker diarization...")
-                diarization_result = await self._perform_diarization(file_path)
-                if diarization_result is not None:
-                    report_progress(
-                        "diarization",
-                        0.7,
-                        f"Diarization completed: {diarization_result.num_speakers} speakers",
-                    )
-                else:
-                    report_progress(
-                        "diarization",
-                        0.7,
-                        "Diarization failed, continuing without speaker labels",
-                    )
-            else:
-                report_progress("diarization", 0.7, "Diarization skipped")
-
-            # Stage 3: Merge transcription and diarization
-            report_progress(
-                "merging",
-                0.75,
-                "Merging transcription and diarization results...",
-            )
-            labeled_segments = self._merge_results(
+            # Execute processing pipeline
+            (
                 transcription_result,
                 diarization_result,
-            )
-
-            # Stage 4: Generate outputs
-            report_progress("output", 0.8, "Generating output files...")
-            output_files = await self._generate_outputs(
-                file_path,
                 labeled_segments,
-                {
-                    "transcription": transcription_result,
-                    "diarization": diarization_result,
-                    "processing_time": time.time() - start_time,
-                    "timestamp": datetime.now().astimezone().isoformat(),
-                },
-            )
+                output_files,
+            ) = await self._execute_processing_pipeline(file_path, report_progress)
 
-            # Stage 5: Post-processing
-            report_progress("postprocessing", 0.9, "Performing post-processing...")
-            await self._post_process_file(file_path)
-
+            # Create successful result
             processing_time = time.time() - start_time
-
-            # Update statistics
-            self._processing_stats["files_processed"] += 1
-            self._processing_stats["total_duration"] += transcription_result.get(
-                "duration",
-                0,
-            )
-            self._processing_stats["total_processing_time"] += processing_time
-
-            report_progress(
-                "completed",
-                1.0,
-                f"Processing completed in {processing_time:.2f}s",
-            )
-
-            self.logger.info(
-                "Successfully processed %s in %.2fs",
+            return self._create_success_result(
                 file_path,
+                output_files,
                 processing_time,
-            )
-
-            return ProcessingResult(
-                input_file=file_path,
-                output_files=output_files,
-                success=True,
-                processing_time=processing_time,
-                transcription_info=transcription_result.get("transcription_info"),
-                diarization_info=self._get_diarization_info(diarization_result),
-                metadata={
-                    "duration": transcription_result.get("duration", 0),
-                    "language": transcription_result.get("language"),
-                    "num_segments": len(labeled_segments),
-                    "num_speakers": diarization_result.num_speakers
-                    if diarization_result
-                    else 1,
-                },
+                transcription_result,
+                diarization_result,
+                labeled_segments,
+                report_progress,
             )
 
         except Exception as e:
@@ -284,6 +193,139 @@ class BatchTranscriber:
                 error_message=error_message,
                 processing_time=processing_time,
             )
+
+    async def _validate_and_initialize(self, file_path: Path) -> None:
+        """Validate input file and initialize components."""
+        if not file_path.exists():
+            msg = f"Input file not found: {file_path}"
+            raise FileSystemError(msg)  # noqa: TRY301
+
+        if not self._whisper_inference:
+            await self.initialize()
+
+    async def _execute_processing_pipeline(
+        self, file_path: Path, report_progress: Callable[[str, float, str], None]
+    ) -> tuple[dict[str, Any], Any, list[dict[str, Any]], dict[str, Path]]:
+        """Execute the complete processing pipeline."""
+        # Stage 1: Transcription
+        report_progress("transcription", 0.1, "Starting transcription...")
+        transcription_result = await self._transcribe_audio(file_path)
+
+        if not transcription_result or not transcription_result.get("segments"):
+            self.logger.warning("No transcription results for %s", file_path)
+            raise TranscriptionError(
+                "No transcription results (silent audio or processing error)"
+            )
+
+        report_progress(
+            "transcription",
+            0.4,
+            f"Transcription completed: {len(transcription_result['segments'])} segments",
+        )
+
+        # Stage 2: Diarization (if enabled)
+        diarization_result = await self._handle_diarization(file_path, report_progress)
+
+        # Stage 3: Merge transcription and diarization
+        report_progress(
+            "merging",
+            0.75,
+            "Merging transcription and diarization results...",
+        )
+        labeled_segments = self._merge_results(transcription_result, diarization_result)
+
+        # Stage 4: Generate outputs
+        report_progress("output", 0.8, "Generating output files...")
+        output_files = await self._generate_outputs(
+            file_path,
+            labeled_segments,
+            {
+                "transcription": transcription_result,
+                "diarization": diarization_result,
+                "processing_time": time.time(),
+                "timestamp": datetime.now().astimezone().isoformat(),
+            },
+        )
+
+        # Stage 5: Post-processing
+        report_progress("postprocessing", 0.9, "Performing post-processing...")
+        await self._post_process_file(file_path)
+
+        return transcription_result, diarization_result, labeled_segments, output_files
+
+    async def _handle_diarization(
+        self, file_path: Path, report_progress: Callable[[str, float, str], None]
+    ) -> Any:
+        """Handle diarization processing if enabled."""
+        if (
+            self.config.diarization.enabled
+            and not graceful_degradation.should_disable_feature("diarization")
+        ):
+            report_progress("diarization", 0.5, "Starting speaker diarization...")
+            diarization_result = await self._perform_diarization(file_path)
+            if diarization_result is not None:
+                report_progress(
+                    "diarization",
+                    0.7,
+                    f"Diarization completed: {diarization_result.num_speakers} speakers",
+                )
+            else:
+                report_progress(
+                    "diarization",
+                    0.7,
+                    "Diarization failed, continuing without speaker labels",
+                )
+            return diarization_result
+        else:
+            report_progress("diarization", 0.7, "Diarization skipped")
+            return None
+
+    def _create_success_result(
+        self,
+        file_path: Path,
+        output_files: dict[str, Path],
+        processing_time: float,
+        transcription_result: dict[str, Any],
+        diarization_result: Any,
+        labeled_segments: list[dict[str, Any]],
+        report_progress: Callable[[str, float, str], None],
+    ) -> ProcessingResult:
+        """Create a successful processing result."""
+        # Update statistics
+        self._processing_stats["files_processed"] += 1
+        self._processing_stats["total_duration"] += transcription_result.get(
+            "duration", 0
+        )
+        self._processing_stats["total_processing_time"] += processing_time
+
+        report_progress(
+            "completed",
+            1.0,
+            f"Processing completed in {processing_time:.2f}s",
+        )
+
+        self.logger.info(
+            "Successfully processed %s in %.2fs",
+            file_path,
+            processing_time,
+        )
+
+        return ProcessingResult(
+            input_file=file_path,
+            output_files=output_files,
+            success=True,
+            processing_time=processing_time,
+            transcription_info=transcription_result.get("transcription_info"),
+            diarization_info=self._get_diarization_info(diarization_result),
+            metadata={
+                "duration": transcription_result.get("duration", 0),
+                "language": transcription_result.get("language"),
+                "num_segments": len(labeled_segments),
+                "num_speakers": diarization_result.num_speakers
+                if diarization_result
+                else 1,
+            },
+        )
 
     async def _transcribe_audio(self, file_path: Path) -> dict[str, Any]:
         """Perform audio transcription."""
@@ -312,9 +354,10 @@ class BatchTranscriber:
             loop = asyncio.get_event_loop()
 
             # Create a wrapper function to handle keyword arguments
-            def transcribe_with_params():
+            def transcribe_with_params() -> tuple[Any, Any]:
                 return self._whisper_inference.transcribe(
-                    str(file_path), **transcribe_params
+                    str(file_path),
+                    **transcribe_params,
                 )
 
             segments_list, transcription_info = await loop.run_in_executor(
@@ -357,11 +400,13 @@ class BatchTranscriber:
                 "segments": processed_segments,
                 "language": transcription_info.get("language"),
                 "language_probability": transcription_info.get(
-                    "language_probability", 1.0
+                    "language_probability",
+                    1.0,
                 ),
                 "duration": transcription_info.get("duration", total_duration),
                 "duration_after_vad": transcription_info.get(
-                    "duration", total_duration
+                    "duration",
+                    total_duration,
                 ),
                 "transcription_info": {
                     "model_size": self.config.transcription.whisper.model_size,
@@ -380,14 +425,15 @@ class BatchTranscriber:
                 transcription_info.get("language", "unknown"),
             )
 
-            return result
-
         except Exception as e:
             self.logger.exception("Transcription failed for %s", file_path)
             # Re-raise as AudioProcessingError to be handled by the error handling system
+            msg = f"Transcription failed for {file_path}: {e}"
             raise AudioProcessingError(
-                f"Transcription failed for {file_path}: {e}"
+                msg,
             ) from e
+        else:
+            return result
 
     async def _perform_diarization(self, file_path: Path) -> DiarizationResult | None:
         """Perform speaker diarization."""
@@ -503,7 +549,8 @@ class BatchTranscriber:
 
                 # Use FileHandler's safe_move_file method which handles cross-device moves
                 final_backup_path = self.file_handler.safe_move_file(
-                    file_path, backup_path
+                    file_path,
+                    backup_path,
                 )
                 self.logger.info("Moved input file to backup: %s", final_backup_path)
 

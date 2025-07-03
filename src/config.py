@@ -407,13 +407,16 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     """Load configuration from YAML file and environment variables.
 
     Args:
+    ----
         config_path: Path to configuration file. If None, looks for CONFIG_PATH
             environment variable or uses default config.yaml
 
     Returns:
+    -------
         AppConfig: Loaded and validated configuration
 
     Raises:
+    ------
         FileNotFoundError: If configuration file is not found
         yaml.YAMLError: If configuration file is invalid YAML
         ValueError: If configuration validation fails
@@ -452,9 +455,11 @@ def create_directories(config: AppConfig) -> None:
     """Create necessary directories if they don't exist.
 
     Args:
+    ----
         config: Application configuration
 
     Raises:
+    ------
         PermissionError: If unable to create directories due to permissions
         OSError: If unable to create directories due to other OS errors
 
@@ -478,9 +483,11 @@ def validate_config(config: AppConfig) -> list[str]:
     """Validate configuration for common issues and return list of warnings.
 
     Args:
+    ----
         config: Application configuration to validate
 
     Returns:
+    -------
         List[str]: List of validation warnings
 
     """

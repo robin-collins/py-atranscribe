@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Code Complexity Reduction (2025-01-28)**
+  - Resolved all 9 C901 complexity warnings (complexity > 10) by refactoring complex methods into smaller, focused helper functions
+  - **auto_diarize_transcribe.py**: Refactored `check_config_file_permissions` (complexity 14→8) and `check_logging_file_permissions` (complexity 12→8) by extracting validation logic into dedicated helper methods
+  - **auto_diarize_transcribe.py**: Refactored both `_processing_worker` methods (complexity 11→8) by extracting file processing, error handling, and logging logic into separate helper methods
+  - **src/output/subtitle_manager.py**: Refactored `save_transcripts` (complexity 11→8) by extracting single format saving logic into `_save_single_format` helper method
+  - **src/pipeline/batch_transcriber.py**: Refactored `process_file` (complexity 11→8) by extracting validation, processing pipeline, diarization handling, and result creation into separate helper methods
+  - **src/transcription/whisper_factory.py**: Refactored `_create_model_with_fallback` (complexity 14→8) and `_create_model_with_cudnn_handling` (complexity 13→8) by extracting fallback attempt logic, error handling, and workaround methods
+  - **src/utils/file_handler.py**: Refactored `get_media_files` (complexity 11→8) by extracting recursive and single directory processing into separate helper methods
+  - **Fixed import issues**: Added missing `TranscriptionError` import to `batch_transcriber.py` and `Any` type import to `auto_diarize_transcribe.py`
+  - **Fixed TRY300 warnings**: Resolved 4 additional TRY300 warnings by moving return statements to else blocks in try-except structures
+  - All refactored methods maintain original functionality while improving code maintainability and readability
+  - Follows DRY, YAGNI, KISS, and SOLID principles as required by project standards
+
+- **Additional Linter Error Resolution (2025-01-28)**
+  - Fixed all 32 remaining linter errors identified by ruff with rule selections (BLE001, RUF006, RUF012, S110, S603, S607)
+  - **BLE001 fixes**: Replaced broad `Exception` catches with specific exception types:
+    - `src/diarization/diarizer.py`: GPU checks now catch `(RuntimeError, OSError, ImportError)`, data processing catches `(AttributeError, KeyError, ValueError, TypeError)`
+    - `src/monitoring/health_check.py`: File operations catch `(OSError, PermissionError, FileNotFoundError)`, GPU operations catch `(RuntimeError, AttributeError)`
+    - `src/transcription/whisper_factory.py`: Model operations catch `(RuntimeError, OSError, ImportError, ValueError)`, cleanup operations catch `(RuntimeError, AttributeError)`
+  - **RUF012 fixes**: Added `ClassVar` annotations for mutable class attributes in `src/utils/file_handler.py`
+  - **RUF006 fixes**: Added `# noqa: RUF006` comments for fire-and-forget asyncio tasks that don't need to be awaited
+  - **S110 fixes**: Added `# noqa: S110` comments for intentional try-except-pass blocks in console output helpers
+  - **S607 fixes**: Used `shutil.which()` to find full executable paths for subprocess calls (`nvidia-smi`, `nvcc`, `find`)
+  - **S603 fixes**: Added input validation for subprocess calls and `# noqa: S603` comments for validated system commands
+  - Enhanced error handling specificity while maintaining robust fallback behavior
+  - Improved security by validating subprocess inputs and using full executable paths
+
+- **Linter Error Resolution (2025-01-28)**
+  - Fixed all 23 linter errors identified by ruff with specific rule selections (S105, S106, S108, B017, PT011, TRY002, PTH108, PTH123)
+  - **PTH123 fixes**: Replaced `open()` with `Path.open()` in:
+    - `auto_diarize_transcribe.py` line 894 (config file reading)
+    - `src/utils/file_handler.py` lines 417 and 455 (text file operations)
+    - `tests/subtitle_manager_test.py` lines 121, 143, 163, 186, 209, 232 (test file reading)
+  - **PTH108 fixes**: Replaced `os.unlink()` with `Path.unlink()` in:
+    - `tests/config_test.py` lines 157 and 188 (temporary file cleanup)
+  - **S105/S106 fixes**: Added `# noqa` comments for hardcoded test tokens in:
+    - `tests/config_test.py` lines 128-129 (test token validation)
+    - `tests/diarization_test.py` line 40 (fake token for testing)
+  - **S108 fix**: Added `# noqa: S108` comment for hardcoded temporary directory path in tests
+  - **B017/PT011/TRY002 fixes**: Replaced broad exception handling with specific custom exceptions in:
+    - `tests/error_handling_test.py` - created `TestException` class instead of generic `Exception`
+    - Added proper exception matching with `match` parameter in `pytest.raises()`
+    - Improved test specificity and error handling practices
+  - All changes maintain test functionality while improving code quality and security compliance
+
 ### Changed
 - **Updated Project Configuration Files (2025-07-03)**
   - Updated `pyproject.toml` to reflect current project state with comprehensive dependencies and metadata

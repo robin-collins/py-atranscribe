@@ -34,4 +34,3 @@ I'll help you execute Ruff with all available checks on the `src/` directory and
 
 
 ---
-

@@ -7,7 +7,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import psutil
@@ -17,6 +17,12 @@ from fastapi.responses import JSONResponse
 
 from src.config import AppConfig
 from src.utils.error_handling import error_tracker
+
+# Import for type hint (avoid circular import)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.monitoring.file_monitor import ProcessingQueue
 
 
 class HealthChecker:
@@ -29,6 +35,7 @@ class HealthChecker:
         """Initialize HealthChecker.
 
         Args:
+        ----
             config: Application configuration
 
         """
@@ -83,16 +90,15 @@ class HealthChecker:
 
                 if health_data["overall_status"] == "healthy":
                     return JSONResponse(status_code=200, content=simple_response)
-                else:
-                    # Include basic error info for unhealthy status
-                    simple_response["issues"] = []
-                    for check_name, check_status in health_data["checks"].items():
-                        if check_status not in ["healthy", "running", "initialized"]:
-                            simple_response["issues"].append(
-                                f"{check_name}: {check_status}"
-                            )
+                # Include basic error info for unhealthy status
+                simple_response["issues"] = []
+                for check_name, check_status in health_data["checks"].items():
+                    if check_status not in ["healthy", "running", "initialized"]:
+                        simple_response["issues"].append(
+                            f"{check_name}: {check_status}",
+                        )
 
-                    return JSONResponse(status_code=503, content=simple_response)
+                return JSONResponse(status_code=503, content=simple_response)
 
             except Exception as exc:
                 self.logger.exception("Health check failed")
@@ -155,7 +161,8 @@ class HealthChecker:
     async def get_health_status(self) -> dict[str, Any]:
         """Get overall health status.
 
-        Returns:
+        Returns
+        -------
             Dict with health status information
 
         """
@@ -193,7 +200,8 @@ class HealthChecker:
     async def get_detailed_health(self) -> dict[str, Any]:
         """Get detailed health information including resource usage.
 
-        Returns:
+        Returns
+        -------
             Dict with detailed health and system information
 
         """
@@ -215,7 +223,8 @@ class HealthChecker:
                     "used_gb": round(memory_info.used / (1024**3), 2),
                     "used_percent": round(memory_info.percent, 1),
                     "free_gb": round(
-                        (memory_info.total - memory_info.used) / (1024**3), 2
+                        (memory_info.total - memory_info.used) / (1024**3),
+                        2,
                     ),
                 },
                 "disk": {
@@ -286,11 +295,12 @@ class HealthChecker:
                             "total_gb": round(disk_usage.total / (1024**3), 2),
                             "free_gb": round(disk_usage.free / (1024**3), 2),
                             "used_percent": round(
-                                (disk_usage.used / disk_usage.total) * 100, 1
+                                (disk_usage.used / disk_usage.total) * 100,
+                                1,
                             ),
                         },
                     }
-                except Exception as e:
+                except (OSError, PermissionError, FileNotFoundError) as e:
                     detailed["directories"][name] = {
                         "path": str(path),
                         "exists": True,
@@ -304,7 +314,7 @@ class HealthChecker:
 
         # Add GPU information if available
         try:
-            import torch  # noqa: PLC0415
+            import torch
 
             if torch.cuda.is_available():
                 gpu_info = {
@@ -321,13 +331,16 @@ class HealthChecker:
                             "id": i,
                             "name": device_props.name,
                             "total_memory_gb": round(
-                                device_props.total_memory / (1024**3), 2
+                                device_props.total_memory / (1024**3),
+                                2,
                             ),
                             "memory_allocated_gb": round(
-                                torch.cuda.memory_allocated(i) / (1024**3), 2
+                                torch.cuda.memory_allocated(i) / (1024**3),
+                                2,
                             ),
                             "memory_reserved_gb": round(
-                                torch.cuda.memory_reserved(i) / (1024**3), 2
+                                torch.cuda.memory_reserved(i) / (1024**3),
+                                2,
                             ),
                             "memory_usage_percent": round(
                                 (
@@ -340,7 +353,7 @@ class HealthChecker:
                             "major": device_props.major,
                             "minor": device_props.minor,
                             "multi_processor_count": device_props.multi_processor_count,
-                        }
+                        },
                     )
 
                 detailed["system"]["gpu"] = gpu_info
@@ -354,7 +367,7 @@ class HealthChecker:
                 "available": False,
                 "error": "PyTorch not available",
             }
-        except Exception as e:
+        except (RuntimeError, AttributeError) as e:
             detailed["system"]["gpu"] = {
                 "available": False,
                 "error": str(e),
@@ -371,7 +384,7 @@ class HealthChecker:
                     "total_items": queue_status.get("queued", 0)
                     + queue_status.get("processing", 0),
                 }
-            except Exception as e:
+            except (AttributeError, RuntimeError, ConnectionError) as e:
                 detailed["processing_queue"] = {
                     "error": str(e),
                 }
@@ -385,7 +398,8 @@ class HealthChecker:
     async def get_metrics(self) -> dict[str, Any]:
         """Get metrics for monitoring systems.
 
-        Returns:
+        Returns
+        -------
             Dict with metrics data
 
         """
@@ -416,7 +430,7 @@ class HealthChecker:
 
         # Add GPU metrics if available
         try:
-            import torch  # noqa: PLC0415
+            import torch
 
             if torch.cuda.is_available():
                 metrics.update(
@@ -449,7 +463,8 @@ class HealthChecker:
     def check_disk_space(self) -> bool:
         """Check if sufficient disk space is available.
 
-        Returns:
+        Returns
+        -------
             bool: True if disk space is sufficient
 
         """
@@ -470,16 +485,17 @@ class HealthChecker:
                             free_gb,
                         )
                         return False
-            return True
-
         except Exception:
             self.logger.exception("Error checking disk space")
             return False
+        else:
+            return True
 
     def check_memory_usage(self) -> bool:
         """Check if memory usage is within acceptable limits.
 
-        Returns:
+        Returns
+        -------
             bool: True if memory usage is acceptable
 
         """
@@ -492,14 +508,15 @@ class HealthChecker:
                     > self.config.health_check.memory_usage_max_percent
                 ):
                     self.logger.warning(
-                        "High memory usage: %.1f%%", memory_info.percent
+                        "High memory usage: %.1f%%",
+                        memory_info.percent,
                     )
                     return False
-            return True
-
         except Exception:
             self.logger.exception("Error checking memory usage")
             return False
+        else:
+            return True
 
     async def check_processing_queue(self) -> bool:
         """Check if processing queue is healthy."""
@@ -507,26 +524,28 @@ class HealthChecker:
             if self._processing_queue_ref:
                 queue_status = await self._processing_queue_ref.get_status()
                 queue_size = queue_status.get("queued", 0) + queue_status.get(
-                    "processing", 0
+                    "processing",
+                    0,
                 )
 
                 # Check if queue is too large
                 if queue_size > self.config.health_check.queue_size_max:
                     self.logger.warning(
-                        "Processing queue too large: %d items", queue_size
+                        "Processing queue too large: %d items",
+                        queue_size,
                     )
                     return False
 
                 return True
 
             # If no queue reference, assume healthy
-            return True
-
-        except Exception as e:
+        except (AttributeError, RuntimeError, ConnectionError) as e:
             self.logger.warning("Error checking processing queue: %s", e)
             return False
+        else:
+            return True
 
-    def set_processing_queue_ref(self, processing_queue) -> None:
+    def set_processing_queue_ref(self, processing_queue: "ProcessingQueue") -> None:
         """Set reference to processing queue for health checks."""
         self._processing_queue_ref = processing_queue
 
@@ -534,6 +553,7 @@ class HealthChecker:
         """Update service status.
 
         Args:
+        ----
             status: New service status
             **kwargs: Additional status fields to update
 

@@ -43,6 +43,7 @@ class FileStabilityTracker:
         """Initialize file stability tracker.
 
         Args:
+        ----
             stability_delay: Seconds to wait after last change before file is stable
 
         """
@@ -54,9 +55,11 @@ class FileStabilityTracker:
         """Update file information and check if it is stable.
 
         Args:
+        ----
             file_path: Path to the file to check
 
         Returns:
+        -------
             bool: True if file is stable and ready for processing
 
         """
@@ -97,7 +100,9 @@ class FileStabilityTracker:
                 file_info.modified_time = current_mtime
                 file_info.stable_since = None
                 self.logger.debug(
-                    "File changed: %s (size: %s)", file_path, current_size
+                    "File changed: %s (size: %s)",
+                    file_path,
+                    current_size,
                 )
                 return False
 
@@ -116,7 +121,8 @@ class FileStabilityTracker:
                     current_size,
                 )
                 return True
-            return False
+            else:
+                return False
 
         except OSError as e:
             self.logger.warning("Error checking file %s: %s", file_path, e)
@@ -219,6 +225,7 @@ class AudioFileHandler(FileSystemEventHandler):
         """Initialize audio file handler.
 
         Args:
+        ----
             supported_formats: List of supported file extensions (with dots)
             stability_tracker: File stability tracker instance
             callback: Optional callback function when stable files are detected
@@ -273,6 +280,7 @@ class FileMonitor:
         """Initialize file monitor.
 
         Args:
+        ----
             config: Application configuration
             callback: Callback function called when files are ready for processing
 
@@ -423,6 +431,7 @@ class ProcessingQueue:
         """Initialize processing queue.
 
         Args:
+        ----
             max_size: Maximum number of files in queue
 
         """
@@ -437,9 +446,11 @@ class ProcessingQueue:
         """Add a file to the processing queue.
 
         Args:
+        ----
             file_path: Path to file to be processed
 
         Returns:
+        -------
             bool: True if file was added, False if already in queue or processing
 
         """
@@ -452,18 +463,20 @@ class ProcessingQueue:
                 await self.queue.put(file_path)
                 self.in_queue.add(file_path)
                 self.logger.debug("File added to queue: %s", file_path)
-                return True
             except asyncio.QueueFull:
                 self.logger.warning(
                     "Processing queue is full, dropping file: %s",
                     file_path,
                 )
                 return False
+            else:
+                return True
 
     async def get(self) -> Path:
         """Get next file from processing queue.
 
-        Returns:
+        Returns
+        -------
             Path: Next file to process
 
         """
@@ -479,6 +492,7 @@ class ProcessingQueue:
         """Mark a file as completed processing.
 
         Args:
+        ----
             file_path: Path to completed file
 
         """

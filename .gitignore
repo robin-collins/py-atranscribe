@@ -144,6 +144,6 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-reference/*
-audio/*
-.specstory/*
+reference
+audio
+.specstory

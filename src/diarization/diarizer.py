@@ -60,9 +60,11 @@ class Diarizer:
         """Initialize Diarizer with configuration.
 
         Args:
+        ----
             config: Diarization configuration
 
         Raises:
+        ------
             ModelError: If initialization fails
 
         """
@@ -148,7 +150,7 @@ class Diarizer:
                         "Insufficient GPU memory for diarization, using CPU",
                     )
                     return "cpu"  # noqa: TRY300
-                except Exception as e:  # BLE001: Broad except required to handle unexpected GPU check errors
+                except (RuntimeError, OSError, ImportError) as e:
                     self.logger.warning("Error checking GPU for diarization: %s", e)
                     return "cpu"
             else:
@@ -160,9 +162,11 @@ class Diarizer:
         """Perform speaker diarization on audio file.
 
         Args:
+        ----
             audio_path: Path to audio file
 
         Returns:
+        -------
             DiarizationResult | None: Diarization results with speaker information, or None if diarization fails
 
         """
@@ -209,7 +213,8 @@ class Diarizer:
             # Validate diarization results
             if diarization is None or len(diarization) == 0:
                 self.logger.warning(
-                    "Diarization produced no results for %s", audio_path
+                    "Diarization produced no results for %s",
+                    audio_path,
                 )
                 return DiarizationResult(
                     speakers=[],
@@ -223,7 +228,7 @@ class Diarizer:
             speakers = self._extract_speakers(diarization, duration)
             segments = self._create_segments(diarization)
 
-            result = DiarizationResult(
+            DiarizationResult(
                 speakers=speakers,
                 segments=segments,
                 duration=duration,
@@ -236,7 +241,7 @@ class Diarizer:
                 len(speakers),
                 len(segments),
             )
-        except Exception as e:
+        except Exception:
             self.logger.exception("Diarization failed for %s", audio_path)
             # Return None on failure to allow graceful degradation
             return None
@@ -249,10 +254,12 @@ class Diarizer:
         """Extract speaker information from diarization annotation.
 
         Args:
+        ----
             diarization: Pyannote diarization annotation
             total_duration: Total audio duration
 
         Returns:
+        -------
             List of detected speakers
 
         """
@@ -285,19 +292,21 @@ class Diarizer:
                 )
                 speaker_list.append(speaker)
 
-            return speaker_list
-
-        except Exception as e:
+        except (AttributeError, KeyError, ValueError, TypeError) as e:
             self.logger.warning("Error extracting speakers: %s", e)
             return []
+        else:
+            return speaker_list
 
     def _create_segments(self, diarization: Annotation) -> list[dict[str, Any]]:
         """Create time-based segments with speaker labels.
 
         Args:
+        ----
             diarization: Pyannote diarization annotation
 
         Returns:
+        -------
             List of segments with speaker information
 
         """
@@ -317,11 +326,11 @@ class Diarizer:
             # Sort segments by start time
             segments.sort(key=lambda x: x["start"])
 
-            return segments
-
-        except Exception as e:
+        except (AttributeError, KeyError, ValueError, TypeError) as e:
             self.logger.warning("Error creating segments: %s", e)
             return []
+        else:
+            return segments
 
     def _get_speaker_index(self, speaker_id: str, diarization: Annotation) -> int:
         """Get consistent speaker index for labeling."""
@@ -341,9 +350,11 @@ class Diarizer:
         """Calculate overall confidence score for diarization.
 
         Args:
+        ----
             diarization: Pyannote diarization annotation
 
         Returns:
+        -------
             Confidence score between 0 and 1
 
         """
@@ -377,7 +388,13 @@ class Diarizer:
 
             return balance_score * 0.6 + coverage_score * 0.4
 
-        except Exception as e:
+        except (
+            AttributeError,
+            KeyError,
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+        ) as e:
             self.logger.warning("Error calculating confidence: %s", e)
             return 0.0
 
@@ -389,10 +406,12 @@ class Diarizer:
         """Assign speaker labels to transcription segments based on overlap.
 
         Args:
+        ----
             transcription_segments: Segments from transcription
             diarization_result: Results from diarization
 
         Returns:
+        -------
             List of segments with speaker assignments
 
         """
@@ -458,9 +477,11 @@ class Diarizer:
         """Get statistics about detected speakers.
 
         Args:
+        ----
             diarization_result: Diarization results
 
         Returns:
+        -------
             Dictionary with speaker statistics
 
         """

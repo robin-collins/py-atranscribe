@@ -188,6 +188,7 @@ class ErrorTracker:
         """Initialize error tracker.
 
         Args:
+        ----
             max_errors: Maximum number of errors to keep in memory
 
         """
@@ -230,7 +231,9 @@ class ErrorTracker:
         return {
             "total_errors": total_errors,
             "recent_errors": len(recent_errors),
-            "error_counts": {category.value: count for category, count in self.error_counts.items()},
+            "error_counts": {
+                category.value: count for category, count in self.error_counts.items()
+            },
             "error_rate": len(recent_errors) / 60
             if recent_errors
             else 0,  # errors per minute
@@ -249,9 +252,11 @@ def classify_error(exception: Exception) -> ErrorInfo:
     """Classify an exception into error categories and create ErrorInfo.
 
     Args:
+    ----
         exception: Exception to classify
 
     Returns:
+    -------
         ErrorInfo: Classified error information
 
     """
@@ -304,7 +309,8 @@ def classify_error(exception: Exception) -> ErrorInfo:
 
 
 def _create_sync_wrapper(
-    config: RetryConfig, func: Callable[..., T]
+    config: RetryConfig,
+    func: Callable[..., T],
 ) -> Callable[..., T]:
     """Create synchronous retry wrapper."""
 
@@ -344,7 +350,8 @@ def _create_sync_wrapper(
 
 
 def _create_async_wrapper(
-    config: RetryConfig, func: Callable[..., T]
+    config: RetryConfig,
+    func: Callable[..., T],
 ) -> Callable[..., T]:
     """Create asynchronous retry wrapper."""
 
@@ -389,6 +396,7 @@ def retry_on_error(
     """Return a decorator that automatically retries on errors.
 
     Args:
+    ----
         config: Retry configuration. If None, uses default configuration.
 
     """
@@ -419,6 +427,7 @@ class CircuitBreaker:
         """Initialize circuit breaker.
 
         Args:
+        ----
             failure_threshold: Number of failures before opening circuit
             timeout: Time to wait before attempting to close circuit
             expected_exception: Exception type that triggers the circuit breaker
@@ -434,19 +443,25 @@ class CircuitBreaker:
         self.logger = logging.getLogger(__name__)
 
     def call(
-        self, func: Callable[..., T], *args: tuple[Any, ...], **kwargs: dict[str, Any]
+        self,
+        func: Callable[..., T],
+        *args: tuple[Any, ...],
+        **kwargs: dict[str, Any],
     ) -> T:
         """Call a function through the circuit breaker.
 
         Args:
+        ----
             func: Function to call
             *args: Function arguments
             **kwargs: Function keyword arguments
 
         Returns:
+        -------
             Function result
 
         Raises:
+        ------
             Exception: If circuit is open or function fails
 
         """
@@ -502,9 +517,11 @@ class GracefulDegradation:
         """Get a fallback model based on current degradation level.
 
         Args:
+        ----
             requested_model: Originally requested model
 
         Returns:
+        -------
             str: Fallback model to use
 
         """
@@ -535,9 +552,11 @@ class GracefulDegradation:
         """Get a fallback compute type based on current degradation level.
 
         Args:
+        ----
             requested_type: Originally requested compute type
 
         Returns:
+        -------
             str: Fallback compute type to use
 
         """
@@ -564,9 +583,11 @@ class GracefulDegradation:
         """Determine if a feature should be disabled based on degradation level.
 
         Args:
+        ----
             feature: Feature name to check
 
         Returns:
+        -------
             bool: True if feature should be disabled
 
         """
