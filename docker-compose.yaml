@@ -1,7 +1,7 @@
 # Docker Compose configuration for py-atranscribe
 # Automated Audio Transcription with Speaker Diarization
 
-version: '3.8'
+name: py-atranscribe
 
 services:
   transcriber:
@@ -11,45 +11,47 @@ services:
     container_name: py-atranscribe
     restart: unless-stopped
 
+    env_file:
+      - .env
+
     # Environment variables
-    environment:
-      - CONFIG_PATH=/app/config.yaml
-      - LOG_LEVEL=INFO
-      - HF_TOKEN=${HF_TOKEN:-}  # Set your HuggingFace token
+    # environment:
+    #   - CONFIG_PATH=/app/config.yaml
+    #   - LOG_LEVEL=INFO
+    #   - HF_TOKEN=hf_redacted
 
-      # Directory overrides
-      - INPUT_DIR=/data/in
-      - OUTPUT_DIR=/data/out
-      - BACKUP_DIR=/data/backup
-      - TEMP_DIR=/tmp/transcribe
+    #   # Directory overrides
+    #   - INPUT_DIR=/data/in
+    #   - OUTPUT_DIR=/data/out
+    #   - BACKUP_DIR=/data/backup
+    #   - TEMP_DIR=/tmp/transcribe
 
-      # Transcription settings
-      - TRANSCRIPTION__WHISPER__MODEL_SIZE=${WHISPER_MODEL:-medium}
-      - TRANSCRIPTION__WHISPER__DEVICE=${DEVICE:-auto}
-      - TRANSCRIPTION__LANGUAGE=${LANGUAGE:-auto}
+    #   # Transcription settings
+    #   - TRANSCRIPTION__WHISPER__MODEL_SIZE=${WHISPER_MODEL:-medium}
+    #   - TRANSCRIPTION__WHISPER__DEVICE=${DEVICE:-auto}
+    #   - TRANSCRIPTION__LANGUAGE=${LANGUAGE:-auto}
 
-      # Diarization settings
-      - DIARIZATION__ENABLED=${DIARIZATION_ENABLED:-true}
-      - DIARIZATION__MIN_SPEAKERS=${MIN_SPEAKERS:-1}
-      - DIARIZATION__MAX_SPEAKERS=${MAX_SPEAKERS:-10}
+    #   # Diarization settings
+    #   - DIARIZATION__ENABLED=${DIARIZATION_ENABLED:-true}
+    #   - DIARIZATION__MIN_SPEAKERS=${MIN_SPEAKERS:-1}
+    #   - DIARIZATION__MAX_SPEAKERS=${MAX_SPEAKERS:-10}
 
-      # Output settings
-      - TRANSCRIPTION__OUTPUT_FORMATS=${OUTPUT_FORMATS:-srt,webvtt,txt,json}
+    #   # Post-processing
+    #   - POST_PROCESSING__ACTION=${POST_PROCESSING_ACTION:-move}
 
-      # Post-processing
-      - POST_PROCESSING__ACTION=${POST_PROCESSING_ACTION:-move}
-
-      # Performance settings
-      - PERFORMANCE__MAX_CONCURRENT_FILES=${MAX_CONCURRENT_FILES:-2}
-      - PERFORMANCE__MAX_MEMORY_USAGE_GB=${MAX_MEMORY_GB:-8.0}
+    #   # Performance settings
+    #   - PERFORMANCE__MAX_CONCURRENT_FILES=${MAX_CONCURRENT_FILES:-2}
+    #   - PERFORMANCE__MAX_MEMORY_USAGE_GB=${MAX_MEMORY_GB:-8.0}
 
     # Volume mounts
     volumes:
-      - /mnt/shared/raspi-audio:/data/in
+      - /mnt/shared/raspi-audio-test:/data/in
       - ./audio/output:/data/out
       - ./audio/backup:/data/backup
+      - ./config.yaml:/app/config.yaml:ro  # Mount config as read-only
       - transcribe-cache:/home/transcribe/.cache
       - transcribe-models:/root/.cache  # For model caching
+      - ./logs/transcribe.log:/var/log/transcribe.log:rw
 
     # Port mapping for health checks
     ports:
@@ -77,8 +79,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 10
+      start_period: 5s
 
     # Logging configuration
     logging:

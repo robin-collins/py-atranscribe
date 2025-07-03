@@ -147,7 +147,7 @@ class Diarizer:
                     self.logger.warning(
                         "Insufficient GPU memory for diarization, using CPU",
                     )
-                    return "cpu"
+                    return "cpu" # noqa: TRY300
                 except Exception as e:  # BLE001: Broad except required to handle unexpected GPU check errors
                     self.logger.warning("Error checking GPU for diarization: %s", e)
                     return "cpu"
@@ -212,13 +212,12 @@ class Diarizer:
                 len(speakers),
                 len(segments),
             )
-
-            return result
-
         except Exception as e:
             self.logger.exception("Diarization failed for %s", audio_path)
             msg = f"Diarization failed: {e}"
             raise ModelError(msg) from e
+        else:
+            return result
 
     def _extract_speakers(
         self, diarization: Annotation, total_duration: float,

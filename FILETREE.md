@@ -68,7 +68,9 @@ py-atranscribe/
 ├── docker-compose.yaml               # Docker compose with monitoring stack
 ├── pyproject.toml                     # Python project configuration and Ruff linting
 ├── .gitignore                         # Git ignore patterns
-├── auto_diarize_transcribe.py         # Main application entry point
+├── auto_diarize_transcribe.py         # Main application entry point with enhanced diagnostics
+│   ├── __init__.py
+│   └── diarizer.py                    # Speaker diarization using pyannote.audio
 ├── .cursorignore                      # Cursor editor ignore patterns
 ├── .cursorindexingignore             # Cursor indexing ignore patterns
 ├── .dockerignore                      # Docker ignore patterns
@@ -132,19 +134,19 @@ reference/                             # Reference implementation (not tracked i
 
 ### Core Application Files
 
-- **auto_diarize_transcribe.py**: Main application entry point with service orchestration
+- **auto_diarize_transcribe.py**: Main application entry point with enhanced diagnostics
 - **src/config.py**: Pydantic-based configuration management with validation
 - **src/pipeline/batch_transcriber.py**: Main processing pipeline coordinator
 
 ### Processing Modules
 
 - **src/transcription/whisper_factory.py**: Factory pattern for Whisper model management
-- **src/diarization/diarizer.py**: Speaker diarization using pyannote.audio (now Ruff-compliant: docstrings, exception handling, structure)
+- **src/diarization/diarizer.py**: Speaker diarization using pyannote.audio (TRY300 warning suppressed)
 - **src/output/subtitle_manager.py**: Multi-format output generation (SRT, WebVTT, etc.)
 
 ### Monitoring and Infrastructure
 
-- **src/monitoring/file_monitor.py**: Watchdog-based file system monitoring (now Ruff-compliant: structure, magic values, logging)
+- **src/monitoring/file_monitor.py**: Watchdog-based file system monitoring (fully Ruff-compliant as of 2025-07-02: structure, type annotations, logging, docstrings, and all lint rules)
 - **src/monitoring/health_check.py**: FastAPI health check endpoints
 - **src/utils/error_handling.py**: Comprehensive error handling and retry mechanisms
 

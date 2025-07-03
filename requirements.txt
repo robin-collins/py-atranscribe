@@ -3,9 +3,10 @@ faster-whisper==1.1.1
 pyannote.audio==3.3.2
 transformers==4.47.1
 
-# PyTorch ecosystem for ML models
-torch>=2.0.0
-torchaudio>=2.0.0
+# PyTorch ecosystem for ML models - pinned for compatibility
+# torch==2.1.2
+# torchvision==0.16.2
+# torchaudio==2.1.2
 
 # Audio processing and format support
 ffmpeg-python>=0.2.0

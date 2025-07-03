@@ -6,6 +6,7 @@ Provides automatic retry logic, graceful degradation, and error classification.
 
 import asyncio
 import logging
+import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -64,6 +65,7 @@ class TranscriptionError(Exception):
         *,
         recoverable: bool = True,
     ) -> None:
+        """Initialize TranscriptionError."""
         super().__init__(message)
         self.category = category
         self.severity = severity
@@ -126,37 +128,20 @@ class GPUError(TranscriptionError):
         super().__init__(message, ErrorCategory.GPU, severity)
 
 
+@dataclass
 class RetryConfig:
     """Configuration for retry behavior."""
 
-    def __init__(
-        self,
-        max_attempts: int = 3,
-        base_delay: float = 1.0,
-        max_delay: float = 60.0,
-        exponential_base: float = 2.0,
-        *,
-        jitter: bool = True,
-        retryable_exceptions: list[type[Exception]] | None = None,
-    ) -> None:
-        """Initialize retry configuration.
+    max_attempts: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 60.0
+    exponential_base: float = 2.0
+    jitter: bool = True
+    retryable_exceptions: list[type[Exception]] | None = None
 
-        Args:
-            max_attempts: Maximum number of retry attempts
-            base_delay: Base delay between retries in seconds
-            max_delay: Maximum delay between retries in seconds
-            exponential_base: Base for exponential backoff
-            jitter: Whether to add random jitter to delays
-            retryable_exceptions: List of exception types that should trigger retries
-
-        """
-        self.max_attempts = max_attempts
-        self.base_delay = base_delay
-        self.max_delay = max_delay
-        self.exponential_base = exponential_base
-        self.jitter = jitter
-
-        if retryable_exceptions is None:
+    def __post_init__(self) -> None:
+        """Post initialization."""
+        if self.retryable_exceptions is None:
             self.retryable_exceptions = [
                 ConnectionError,
                 TimeoutError,
@@ -167,8 +152,6 @@ class RetryConfig:
                 OSError,
                 IOError,
             ]
-        else:
-            self.retryable_exceptions = retryable_exceptions
 
     def calculate_delay(self, attempt: int) -> float:
         """Calculate delay for a given retry attempt."""
@@ -177,7 +160,6 @@ class RetryConfig:
 
         if self.jitter:
             # Add random jitter (±25% of delay)
-            import secrets
             jitter_amount = delay * 0.25
             delay += secrets.SystemRandom().uniform(-jitter_amount, jitter_amount)
 
@@ -318,7 +300,81 @@ def classify_error(exception: Exception) -> ErrorInfo:
     )
 
 
-def retry_on_error(config: RetryConfig | None = None) -> Callable:
+def _create_sync_wrapper(config: RetryConfig, func: Callable[..., T]) -> Callable[..., T]:
+    """Create synchronous retry wrapper."""
+    @wraps(func)
+    def sync_wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> T:
+        last_exception = None
+        logger = logging.getLogger(__name__)
+
+        for attempt in range(1, config.max_attempts + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                error_info = classify_error(e)
+                error_info.retry_count = attempt - 1
+
+                if not config.should_retry(e, attempt):
+                    error_tracker.record_error(error_info)
+                    raise
+
+                if attempt < config.max_attempts:
+                    delay = config.calculate_delay(attempt)
+                    logger.warning(
+                        "Attempt %d failed, retrying in %.2fs: %s",
+                        attempt,
+                        delay,
+                        e,
+                    )
+                    time.sleep(delay)
+                else:
+                    error_tracker.record_error(error_info)
+
+        # If we get here, all attempts failed
+        raise last_exception
+
+    return sync_wrapper
+
+
+def _create_async_wrapper(config: RetryConfig, func: Callable[..., T]) -> Callable[..., T]:
+    """Create asynchronous retry wrapper."""
+    @wraps(func)
+    async def async_wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> T:
+        last_exception = None
+        logger = logging.getLogger(__name__)
+
+        for attempt in range(1, config.max_attempts + 1):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                error_info = classify_error(e)
+                error_info.retry_count = attempt - 1
+
+                if not config.should_retry(e, attempt):
+                    error_tracker.record_error(error_info)
+                    raise
+
+                if attempt < config.max_attempts:
+                    delay = config.calculate_delay(attempt)
+                    logger.warning(
+                        "Attempt %d failed, retrying in %.2fs: %s",
+                        attempt,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    error_tracker.record_error(error_info)
+
+        # If we get here, all attempts failed
+        raise last_exception
+
+    return async_wrapper
+
+
+def retry_on_error(config: RetryConfig | None = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Return a decorator that automatically retries on errors.
 
     Args:
@@ -329,66 +385,10 @@ def retry_on_error(config: RetryConfig | None = None) -> Callable:
         config = RetryConfig()
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @wraps(func)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> T:
-            last_exception = None
-
-            for attempt in range(1, config.max_attempts + 1):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-                    error_info = classify_error(e)
-                    error_info.retry_count = attempt - 1
-
-                    if not config.should_retry(e, attempt):
-                        error_tracker.record_error(error_info)
-                        raise
-
-                    if attempt < config.max_attempts:
-                        delay = config.calculate_delay(attempt)
-                        logging.getLogger(__name__).warning(
-                            "Attempt %d failed, retrying in %.2fs: %s", attempt, delay, e,
-                        )
-                        time.sleep(delay)
-                    else:
-                        error_tracker.record_error(error_info)
-
-            # If we get here, all attempts failed
-            raise last_exception
-
-        @wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
-            last_exception = None
-
-            for attempt in range(1, config.max_attempts + 1):
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-                    error_info = classify_error(e)
-                    error_info.retry_count = attempt - 1
-
-                    if not config.should_retry(e, attempt):
-                        error_tracker.record_error(error_info)
-                        raise
-
-                    if attempt < config.max_attempts:
-                        delay = config.calculate_delay(attempt)
-                        logging.getLogger(__name__).warning(
-                            "Attempt %d failed, retrying in %.2fs: %s", attempt, delay, e,
-                        )
-                        await asyncio.sleep(delay)
-                    else:
-                        error_tracker.record_error(error_info)
-
-            # If we get here, all attempts failed
-            raise last_exception
-
         # Return appropriate wrapper based on function type
         if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        return sync_wrapper
+            return _create_async_wrapper(config, func)
+        return _create_sync_wrapper(config, func)
 
     return decorator
 
@@ -422,7 +422,7 @@ class CircuitBreaker:
         self.state = "closed"  # closed, open, half-open
         self.logger = logging.getLogger(__name__)
 
-    def call(self, func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    def call(self, func: Callable[..., T], *args: tuple[Any, ...], **kwargs: dict[str, Any]) -> T:
         """Call a function through the circuit breaker.
 
         Args:
@@ -448,10 +448,11 @@ class CircuitBreaker:
         try:
             result = func(*args, **kwargs)
             self._on_success()
-            return result
         except self.expected_exception:
             self._on_failure()
             raise
+        else:
+            return result
 
     def _on_success(self) -> None:
         """Handle successful operation."""

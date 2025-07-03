@@ -1,4 +1,5 @@
 """Main pipeline orchestrator for batch transcription and diarization.
+
 Coordinates the entire processing workflow from audio input to multi-format output.
 """
 
@@ -9,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from src.config import AppConfig
 from src.diarization.diarizer import DiarizationResult, Diarizer
@@ -48,11 +49,13 @@ class ProcessingProgress:
     timestamp: float
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert ProcessingProgress to a dictionary."""
         return asdict(self)
 
 
 class BatchTranscriber:
     """Main orchestrator for the transcription and diarization pipeline.
+
     Handles the complete workflow from audio input to multi-format output.
     """
 
@@ -91,11 +94,10 @@ class BatchTranscriber:
             )
 
             # Verify diarization if enabled
-            if self.config.diarization.enabled:
-                if not self.diarizer.is_enabled():
-                    self.logger.warning(
-                        "Diarization requested but not properly initialized",
-                    )
+            if self.config.diarization.enabled and not self.diarizer.is_enabled():
+                self.logger.warning(
+                    "Diarization requested but not properly initialized",
+                )
 
             self.logger.info("Transcription pipeline initialized successfully")
 
@@ -131,7 +133,9 @@ class BatchTranscriber:
                 )
                 try:
                     progress_callback(progress_info)
-                except Exception as e:  # BLE001: Broad except required to handle arbitrary callback errors
+                except ExceptionGroup as e:
+                    self.logger.warning("Error in progress callback: %s", e)
+                except Exception as e:  # noqa: BLE001
                     self.logger.warning("Error in progress callback: %s", e)
 
         try:
@@ -143,7 +147,7 @@ class BatchTranscriber:
             # Validate input file
             if not file_path.exists():
                 msg = f"Input file not found: {file_path}"
-                raise FileSystemError(msg)
+                raise FileSystemError(msg)  # noqa: TRY301
 
             if not self._whisper_inference:
                 await self.initialize()
@@ -201,7 +205,7 @@ class BatchTranscriber:
                     "transcription": transcription_result,
                     "diarization": diarization_result,
                     "processing_time": time.time() - start_time,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now().astimezone().isoformat(),
                 },
             )
 
@@ -243,7 +247,7 @@ class BatchTranscriber:
                 },
             )
 
-        except Exception as e:  # BLE001: Broad except required to catch all pipeline errors
+        except Exception as e:
             processing_time = time.time() - start_time
             error_message = str(e)
 
@@ -294,11 +298,15 @@ class BatchTranscriber:
             )
 
 
-        except Exception as e:
+        except ExceptionGroup as e:
             self.logger.warning(
                 "Diarization failed for %s, continuing without speaker labels: %s", file_path, e,
             )
-            # Don't raise exception for diarization failures, continue without speaker labels
+            return None
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(
+                "Diarization failed for %s, continuing without speaker labels: %s", file_path, e,
+            )
             return None
 
     def _merge_results(
@@ -372,7 +380,7 @@ class BatchTranscriber:
 
                 # Create backup directory structure
                 if self.config.post_processing.backup_structure == "date":
-                    today = datetime.now().strftime("%Y-%m-%d")
+                    today = datetime.now().astimezone().strftime("%Y-%m-%d")
                     backup_dir = backup_dir / today
                 elif self.config.post_processing.backup_structure == "original":
                     # Preserve original directory structure
@@ -482,5 +490,6 @@ class BatchTranscriber:
                 WhisperFactory.clear_cache()
             if hasattr(self, "diarizer"):
                 Diarizer.clear_cache()
-        except Exception:  # BLE001: Broad except required to ignore all destructor errors
-            pass  # Ignore errors during destruction
+        except Exception as e:  # noqa: BLE001
+            # Log the exception instead of passing silently for S110 compliance
+            logging.getLogger(__name__).warning("Destructor cleanup failed: %s", e)

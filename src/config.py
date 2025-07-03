@@ -312,6 +312,7 @@ class AppConfig(BaseSettings):
         case_sensitive=False,
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",  # Ignore extra environment variables that don't match model fields
     )
 
     directories: DirectoriesConfig = Field(default_factory=DirectoriesConfig)

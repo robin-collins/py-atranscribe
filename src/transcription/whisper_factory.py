@@ -8,13 +8,18 @@ import contextlib
 import gc
 import logging
 import os
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Optional
 
 import torch
 from faster_whisper import WhisperModel
 
 from src.config import WhisperConfig
-from src.utils.error_handling import ModelError, graceful_degradation, retry_on_error
+from src.utils.error_handling import (
+    AudioProcessingError,
+    ModelError,
+    graceful_degradation,
+    retry_on_error,
+)
 
 
 class WhisperFactory:
@@ -65,7 +70,9 @@ class WhisperFactory:
                 gpu_memory = torch.cuda.get_device_properties(0).total_memory
                 gpu_memory_gb = gpu_memory / (1024**3)
 
-                if gpu_memory_gb >= 2.0:
+                gpu_memory_threshold = 2.0
+
+                if gpu_memory_gb >= gpu_memory_threshold:
                     cls._device_cache = "cuda"
                     logging.getLogger(__name__).info(
                         "Using CUDA device with %.1fGB memory", gpu_memory_gb,
@@ -74,7 +81,8 @@ class WhisperFactory:
                 logging.getLogger(__name__).warning(
                     "GPU has insufficient memory (%.1fGB), using CPU", gpu_memory_gb,
                 )
-            except Exception as e:
+                return "cpu"
+            except RuntimeError as e:
                 logging.getLogger(__name__).warning(
                     "Error checking GPU memory, using CPU: %s", e,
                 )
@@ -170,7 +178,7 @@ class WhisperFactory:
                     self._instances[cache_key] = model
                     self.logger.info("Successfully created Whisper model: %s", cache_key)
 
-                except Exception as e:
+                except RuntimeError as e:
                     # Try fallback options on failure
                     if device == "cuda" and "out of memory" in str(e).lower():
                         self.logger.warning("GPU out of memory, falling back to CPU")
@@ -191,16 +199,14 @@ class WhisperFactory:
                             model = self._instances[cache_key]
                     else:
                         msg = f"Failed to create Whisper model: {e}"
-                        raise ModelError(
-                            msg, model_size,
-                        )
+                        raise ModelError(msg, model_size) from e
 
             return FasterWhisperInference(model, config)
 
         except Exception as e:
             self.logger.exception("Error creating Whisper inference")
             msg = f"Failed to create Whisper inference: {e}"
-            raise ModelError(msg)
+            raise ModelError(msg) from e
 
 
 class FasterWhisperInference:
@@ -228,7 +234,7 @@ class FasterWhisperInference:
         audio_path: str,
         language: str | None = None,
         initial_prompt: str | None = None,
-        **kwargs,
+        **kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         """Transcribe audio file to text with timestamps.
 
@@ -239,7 +245,7 @@ class FasterWhisperInference:
             **kwargs: Additional transcription parameters
 
         Returns:
-            Dict containing transcription results with segments and metadata
+            dict containing transcription results with segments and metadata
 
         Raises:
             AudioProcessingError: If transcription fails
@@ -260,8 +266,8 @@ class FasterWhisperInference:
                 "log_prob_threshold": -1.0,  # Filter out segments with low probability
                 "no_speech_threshold": 0.6,  # Filter out segments without speech
                 "word_timestamps": True,  # Enable word-level timestamps
-                "prepend_punctuations": "\"'([{-",
-                "append_punctuations": "\"'.,:)]}",
+                "prepend_punctuations": '"\'([{-',
+                "append_punctuations": '"\'.,:)]}',
             }
 
             # Override with any provided parameters
@@ -328,12 +334,10 @@ class FasterWhisperInference:
 
             return result
 
-        except Exception as e:
+        except AudioProcessingError as e:
             self.logger.exception("Transcription failed for %s", audio_path)
-            from src.utils.error_handling import AudioProcessingError
-
             msg = f"Transcription failed: {e}"
-            raise AudioProcessingError(msg, audio_path)
+            raise AudioProcessingError(msg, audio_path) from e
 
     def detect_language(self, audio_path: str) -> dict[str, Any]:
         """Detect the language of an audio file.
@@ -342,7 +346,7 @@ class FasterWhisperInference:
             audio_path: Path to audio file
 
         Returns:
-            Dict containing detected language and confidence
+            dict containing detected language and confidence
 
         """
         try:
@@ -377,12 +381,10 @@ class FasterWhisperInference:
 
             return result
 
-        except Exception as e:
+        except AudioProcessingError as e:
             self.logger.exception("Language detection failed for %s", audio_path)
-            from src.utils.error_handling import AudioProcessingError
-
             msg = f"Language detection failed: {e}"
-            raise AudioProcessingError(msg, audio_path)
+            raise AudioProcessingError(msg, audio_path) from e
 
     def get_model_info(self) -> dict[str, Any]:
         """Get information about the loaded model."""

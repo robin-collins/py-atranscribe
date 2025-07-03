@@ -1,11 +1,12 @@
-"""Health check endpoint for container monitoring and orchestration.
+"""Expose health check endpoints for container monitoring and orchestration.
+
 Provides system status, resource monitoring, and service health information.
 """
 
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 from typing import Any
 
 import psutil
@@ -19,6 +20,7 @@ from src.utils.error_handling import error_tracker
 
 class HealthChecker:
     """Health checker that monitors system resources and service status.
+
     Provides health endpoints for container orchestration platforms.
     """
 
@@ -53,11 +55,18 @@ class HealthChecker:
 
     def _register_endpoints(self) -> None:
         """Register health check endpoints."""
+        self._register_health_endpoint()
+        self._register_ready_endpoint()
+        self._register_live_endpoint()
+        self._register_detailed_endpoint()
+        self._register_metrics_endpoint()
 
+    def _register_health_endpoint(self) -> None:
         @self.app.get("/health")
-        async def health_check():
-            """Basic health check endpoint.
-            Returns 200 if service is healthy, 503 if unhealthy.
+        async def health_check() -> JSONResponse:
+            """Perform health check.
+
+            Return 200 if service is healthy, 503 if unhealthy.
             """
             try:
                 health_data = await self.get_health_status()
@@ -66,60 +75,63 @@ class HealthChecker:
                     return JSONResponse(status_code=200, content=health_data)
                 return JSONResponse(status_code=503, content=health_data)
 
-            except Exception as e:
-                self.logger.exception(f"Health check failed: {e}")
+            except Exception as exc:
+                self.logger.exception("Health check failed")
                 return JSONResponse(
                     status_code=503,
                     content={
                         "overall_status": "unhealthy",
-                        "error": str(e),
-                        "timestamp": datetime.now().isoformat(),
+                        "error": str(exc),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     },
                 )
 
+    def _register_ready_endpoint(self) -> None:
         @self.app.get("/health/ready")
-        async def readiness_check():
-            """Kubernetes readiness probe endpoint.
-            Returns 200 when service is ready to handle requests.
+        async def readiness_check() -> dict[str, Any]:
+            """Check Kubernetes readiness.
+
+            Return 200 when service is ready to handle requests.
             """
             if self._service_status["status"] == "ready":
-                return {"status": "ready", "timestamp": datetime.now().isoformat()}
+                return {"status": "ready", "timestamp": datetime.now(UTC).isoformat()}
             raise HTTPException(
                 status_code=503,
                 detail=f"Service not ready: {self._service_status['status']}",
             )
 
+    def _register_live_endpoint(self) -> None:
         @self.app.get("/health/live")
-        async def liveness_check():
-            """Kubernetes liveness probe endpoint.
-            Returns 200 if service is alive and not deadlocked.
+        async def liveness_check() -> dict[str, Any]:
+            """Check Kubernetes liveness.
+
+            Return 200 if service is alive and not deadlocked.
             """
             # Simple liveness check - if we can respond, we're alive
-            return {"status": "alive", "timestamp": datetime.now().isoformat()}
+            return {"status": "alive", "timestamp": datetime.now(UTC).isoformat()}
 
+    def _register_detailed_endpoint(self) -> None:
         @self.app.get("/health/detailed")
-        async def detailed_health():
-            """Detailed health information including resource usage and statistics."""
+        async def detailed_health() -> JSONResponse:
+            """Return detailed health information including resource usage and statistics."""
             try:
-                detailed_health = await self.get_detailed_health()
-                return JSONResponse(content=detailed_health)
-            except Exception as e:
-                self.logger.exception(f"Detailed health check failed: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                detailed_health_info = await self.get_detailed_health()
+                return JSONResponse(content=detailed_health_info)
+            except Exception as exc:
+                self.logger.exception("Detailed health check failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    def _register_metrics_endpoint(self) -> None:
         @self.app.get("/metrics")
-        async def metrics():
-            """Prometheus-style metrics endpoint."""
+        async def metrics() -> Response:
+            """Expose Prometheus-style metrics endpoint."""
             try:
                 metrics_data = await self.get_metrics()
-
-                # Convert to Prometheus format
                 prometheus_metrics = self._format_prometheus_metrics(metrics_data)
-
                 return Response(content=prometheus_metrics, media_type="text/plain")
-            except Exception as e:
-                self.logger.exception(f"Metrics endpoint failed: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+            except Exception as exc:
+                self.logger.exception("Metrics endpoint failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     async def get_health_status(self) -> dict[str, Any]:
         """Get overall health status.
@@ -156,7 +168,7 @@ class HealthChecker:
                 else "not_initialized",
             },
             "uptime_seconds": time.time() - self.start_time,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
     async def get_detailed_health(self) -> dict[str, Any]:
@@ -202,7 +214,7 @@ class HealthChecker:
 
         # Add GPU information if available
         try:
-            import torch
+            import torch  # noqa: PLC0415
 
             if torch.cuda.is_available():
                 detailed["system"]["gpu"] = {
@@ -257,7 +269,7 @@ class HealthChecker:
 
         # Add GPU metrics if available
         try:
-            import torch
+            import torch  # noqa: PLC0415
 
             if torch.cuda.is_available():
                 metrics.update(
@@ -306,14 +318,15 @@ class HealthChecker:
 
                     if free_gb < self.config.health_check.disk_space_min_gb:
                         self.logger.warning(
-                            f"Low disk space in {directory}: {free_gb:.2f}GB",
+                            "Low disk space in %s: %.2fGB",
+                            directory,
+                            free_gb,
                         )
                         return False
-
             return True
 
-        except Exception as e:
-            self.logger.exception(f"Error checking disk space: {e}")
+        except Exception:
+            self.logger.exception("Error checking disk space")
             return False
 
     def check_memory_usage(self) -> bool:
@@ -326,14 +339,14 @@ class HealthChecker:
         try:
             memory_info = psutil.virtual_memory()
 
-            if memory_info.percent > self.config.health_check.memory_usage_max_percent:
-                self.logger.warning("High memory usage: %.1f%%", memory_info.percent)
-                return False
-
+            for _ in range(1):
+                if memory_info.percent > self.config.health_check.memory_usage_max_percent:
+                    self.logger.warning("High memory usage: %.1f%%", memory_info.percent)
+                    return False
             return True
 
-        except Exception as e:
-            self.logger.exception(f"Error checking memory usage: {e}")
+        except Exception:
+            self.logger.exception("Error checking memory usage")
             return False
 
     async def check_processing_queue(self) -> bool:
@@ -347,7 +360,7 @@ class HealthChecker:
         # For now, return True as a placeholder
         return True
 
-    def update_service_status(self, status: str, **kwargs) -> None:
+    def update_service_status(self, status: str, **kwargs: object) -> None:
         """Update service status.
 
         Args:
@@ -356,7 +369,7 @@ class HealthChecker:
 
         """
         self._service_status["status"] = status
-        self._service_status["last_activity"] = datetime.now().isoformat()
+        self._service_status["last_activity"] = datetime.now(UTC).isoformat()
 
         for key, value in kwargs.items():
             self._service_status[key] = value
@@ -381,15 +394,16 @@ class HealthChecker:
             server = uvicorn.Server(config)
 
             self.logger.info(
-                f"Starting health check server on "
-                f"{self.config.health_check.host}:{self.config.health_check.port}",
+                "Starting health check server on %s:%d",
+                self.config.health_check.host,
+                self.config.health_check.port,
             )
 
-            # Start server in background task
-            asyncio.create_task(server.serve())
+            # Start server in background task and store the task reference
+            self._server_task = asyncio.create_task(server.serve())
 
-        except Exception as e:
-            self.logger.exception(f"Failed to start health check server: {e}")
+        except Exception:
+            self.logger.exception("Failed to start health check server")
             raise
 
     async def stop_server(self) -> None:

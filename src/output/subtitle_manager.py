@@ -1,5 +1,6 @@
 """Multi-format subtitle and transcript generation manager.
 Supports SRT, WebVTT, TXT, JSON, TSV, and LRC output formats.
+
 """
 
 import json
@@ -31,6 +32,7 @@ class TranscriptSegment:
 class SubtitleManager:
     """Manages the creation and output of transcripts in multiple formats.
     Supports SRT, WebVTT, TXT, JSON, TSV, and LRC formats.
+
     """
 
     def __init__(self) -> None:
@@ -113,9 +115,7 @@ class SubtitleManager:
             except Exception as e:
                 self.logger.exception(f"Failed to save {format_name} format: {e}")
                 msg = f"Failed to save {format_name} format: {e}"
-                raise FileSystemError(
-                    msg, str(output_path),
-                )
+                raise FileSystemError(msg, str(output_path)) from e
 
         self.logger.info(
             f"Saved transcripts in {len(saved_files)} formats: {list(saved_files.keys())}",
@@ -163,7 +163,7 @@ class SubtitleManager:
 
         # Write SRT file
         srt_content = srt.compose(srt_subtitles)
-        with open(output_path, "w", encoding="utf-8") as f:
+        with Path(output_path).open("w", encoding="utf-8") as f:
             f.write(srt_content)
 
         return output_path
@@ -209,7 +209,7 @@ class SubtitleManager:
                 lines.append(f"{timestamp} {segment.text}")
 
         # Write text file
-        with open(output_path, "w", encoding="utf-8") as f:
+        with Path(output_path).open("w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
         return output_path
@@ -257,7 +257,7 @@ class SubtitleManager:
         }
 
         # Write JSON file
-        with open(output_path, "w", encoding="utf-8") as f:
+        with Path(output_path).open("w", encoding="utf-8") as f:
             json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
         return output_path
@@ -278,7 +278,7 @@ class SubtitleManager:
             lines.append(line)
 
         # Write TSV file
-        with open(output_path, "w", encoding="utf-8") as f:
+        with Path(output_path).open("w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
         return output_path
@@ -306,7 +306,7 @@ class SubtitleManager:
             lines.append(f"{lrc_time}{text}")
 
         # Write LRC file
-        with open(output_path, "w", encoding="utf-8") as f:
+        with Path(output_path).open("w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
         return output_path
@@ -333,7 +333,9 @@ class SubtitleManager:
         secs = seconds % 60
         return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
-    def get_transcript_summary(self, segments: list[dict[str, Any]]) -> dict[str, Any]:
+    def get_transcript_summary(
+        self, segments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Generate a summary of the transcript.
 
         Args:
@@ -411,33 +413,33 @@ class SubtitleManager:
         for segment in segments:
             duration = segment.get("end", 0) - segment.get("start", 0)
 
-            if duration < min_duration and current_segment is not None:
-                # Merge with previous segment if same speaker or no speaker info
-                if (
+            if (
+                duration < min_duration
+                and current_segment is not None
+                and (
                     segment.get("speaker") == current_segment.get("speaker")
                     or not segment.get("speaker")
                     or not current_segment.get("speaker")
-                ):
-                    # Merge text and extend end time
-                    current_segment["text"] += " " + segment.get("text", "")
-                    current_segment["end"] = segment.get("end", current_segment["end"])
+                )
+            ):
+                # Merge text and extend end time
+                current_segment["text"] += " " + segment.get("text", "")
+                current_segment["end"] = segment.get("end", current_segment["end"])
 
-                    # Update confidence (weighted average)
-                    if "confidence" in segment and "confidence" in current_segment:
-                        old_duration = (
-                            current_segment["end"] - current_segment["start"] - duration
-                        )
-                        total_duration = (
-                            current_segment["end"] - current_segment["start"]
-                        )
+                # Update confidence (weighted average)
+                if "confidence" in segment and "confidence" in current_segment:
+                    old_duration = (
+                        current_segment["end"] - current_segment["start"] - duration
+                    )
+                    total_duration = current_segment["end"] - current_segment["start"]
 
-                        if total_duration > 0:
-                            current_segment["confidence"] = (
-                                current_segment["confidence"] * old_duration
-                                + segment.get("confidence", 0) * duration
-                            ) / total_duration
+                    if total_duration > 0:
+                        current_segment["confidence"] = (
+                            current_segment["confidence"] * old_duration
+                            + segment.get("confidence", 0) * duration
+                        ) / total_duration
 
-                    continue
+                continue
 
             # Add current segment to results if it exists
             if current_segment is not None:
@@ -468,7 +470,8 @@ class SubtitleManager:
             List of filtered segments
 
         """
-        if min_confidence <= -2.0:  # Very permissive threshold
+        very_permissive_threshold = -2.0
+        if min_confidence <= very_permissive_threshold:  # Very permissive threshold
             return segments
 
         filtered_segments = []
