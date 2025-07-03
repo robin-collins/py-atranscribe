@@ -29,8 +29,38 @@ from pathlib import Path
 from typing import Optional
 
 import psutil
+import socket
 import structlog
 import yaml
+
+# Optional imports for ML functionality
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
+
+try:
+    import torchaudio
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    torchaudio = None
+    TORCHAUDIO_AVAILABLE = False
+
+try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    WhisperModel = None
+    FASTER_WHISPER_AVAILABLE = False
+
+try:
+    from pyannote.audio import Pipeline
+    PYANNOTE_AVAILABLE = True
+except ImportError:
+    Pipeline = None
+    PYANNOTE_AVAILABLE = False
 
 from src.config import create_directories, load_config, validate_config
 from src.monitoring.file_monitor import FileMonitor, ProcessingQueue
@@ -116,7 +146,8 @@ class SystemMonitor:
     async def _check_gpu_status(self) -> None:
         """Check GPU status and memory usage."""
         try:
-            import torch
+            if not TORCH_AVAILABLE:
+                return  # PyTorch not available
 
             if torch.cuda.is_available():
                 for device_id in range(torch.cuda.device_count()):
@@ -143,8 +174,6 @@ class SystemMonitor:
                             f"GPU {device_id} memory high: {usage_percent:.1f}%",
                         )
 
-        except ImportError:
-            pass  # PyTorch not available
         except Exception:
             self.logger.exception("Error checking GPU status")
 
@@ -413,7 +442,9 @@ class StartupChecker:
     def check_torch_installation(self) -> bool:
         """Check PyTorch installation and functionality."""
         try:
-            import torch
+            if not TORCH_AVAILABLE:
+                print("   PyTorch not available")
+                return False
 
             # Print PyTorch version
             print(f"   PyTorch version: {torch.__version__}")
@@ -452,7 +483,7 @@ class StartupChecker:
                 print(f"   cuDNN enabled: {cudnn_enabled}")
                 print(f"   cuDNN version: {cudnn_version}")
 
-        except (ImportError, RuntimeError, OSError) as e:
+        except (RuntimeError, OSError) as e:
             print(f"   PyTorch test failed: {e}")
             return False
         else:
@@ -461,7 +492,9 @@ class StartupChecker:
     def check_cuda_availability(self) -> bool:
         """Check CUDA availability and configuration with comprehensive diagnostics."""
         try:
-            import torch
+            if not TORCH_AVAILABLE:
+                print("   PyTorch not available")
+                return False
 
             # Check nvidia-smi availability
             nvidia_smi_available = self._check_nvidia_smi()
@@ -522,7 +555,7 @@ class StartupChecker:
             print(
                 f"   cuDNN libraries: {'Found' if cudnn_libraries_found else 'Not Found'}",
             )
-        except (ImportError, RuntimeError, OSError) as e:
+        except (RuntimeError, OSError) as e:
             print(f"   CUDA check failed: {e}")
             return False
         else:
@@ -727,7 +760,9 @@ class StartupChecker:
     def _check_pytorch_cuda_detailed(self) -> bool:
         """Check PyTorch CUDA functionality with detailed diagnostics."""
         try:
-            import torch
+            if not TORCH_AVAILABLE:
+                print("     PyTorch: Not available")
+                return False
 
             # Always show PyTorch version (valuable for debugging)
             print(f"     PyTorch: {torch.__version__}")
@@ -788,7 +823,7 @@ class StartupChecker:
                     bn_layer(bn_input)
                     print("     ✅ cuDNN batch normalization passed")
 
-                except (RuntimeError, torch.cuda.OutOfMemoryError, ImportError) as cudnn_error:
+                except (RuntimeError, torch.cuda.OutOfMemoryError) as cudnn_error:
                     error_msg = str(cudnn_error).lower()
                     if "libcudnn" in error_msg or "cudnn" in error_msg:
                         print(f"     ⚠️  cuDNN runtime operations failed: {cudnn_error}")
@@ -801,25 +836,29 @@ class StartupChecker:
                 else:
                     return True
 
-            except (RuntimeError, torch.cuda.OutOfMemoryError, ImportError) as tensor_error:
+            except (RuntimeError, torch.cuda.OutOfMemoryError) as tensor_error:
                 print(f"     ❌ CUDA tensor operations failed: {tensor_error}")
                 return False
 
-        except (ImportError, RuntimeError, OSError) as e:
+        except (RuntimeError, OSError) as e:
             print(f"     PyTorch CUDA check failed: {e}")
             return False
 
     def check_audio_processing(self) -> bool:
         """Check audio processing capabilities."""
         try:
-            import torch
-            import torchaudio
+            if not TORCH_AVAILABLE:
+                print("   PyTorch not available")
+                return False
+            if not TORCHAUDIO_AVAILABLE:
+                print("   TorchAudio not available")
+                return False
 
             # Test basic audio functionality
             sample_rate = 16000
             duration = 1.0
             torch.randn(1, int(sample_rate * duration))
-        except (ImportError, RuntimeError) as e:
+        except RuntimeError as e:
             print(f"   Audio processing test failed: {e}")
             return False
         else:
@@ -827,27 +866,21 @@ class StartupChecker:
 
     def check_whisper_models(self) -> bool:
         """Check Whisper model availability."""
-        try:
-            from faster_whisper import WhisperModel
-
-            # This doesn't actually load the model, just checks if we can import
-        except (ImportError, ModuleNotFoundError) as e:
-            print(f"   Whisper model check failed: {e}")
+        if not FASTER_WHISPER_AVAILABLE:
+            print("   Faster-Whisper not available")
             return False
-        else:
-            return True
+
+        # This doesn't actually load the model, just checks if we can import
+        return True
 
     def check_diarization_models(self) -> bool:
         """Check diarization model availability."""
-        try:
-            from pyannote.audio import Pipeline
-
-            # Check if we can import the pipeline
-        except (ImportError, ModuleNotFoundError) as e:
-            print(f"   Diarization model check failed: {e}")
+        if not PYANNOTE_AVAILABLE:
+            print("   Pyannote.audio not available")
             return False
-        else:
-            return True
+
+        # Check if we can import the pipeline
+        return True
 
     def check_huggingface_token(self) -> bool:
         """Check HuggingFace token for diarization."""
@@ -943,15 +976,9 @@ class StartupChecker:
 
                     # Basic YAML syntax check
                     try:
-                        import yaml
-
                         yaml.safe_load(content)
                         print(
                             f"     Config file: Read access OK ({len(content)} bytes, valid YAML)",
-                        )
-                    except ImportError:
-                        print(
-                            f"     Config file: Read access OK ({len(content)} bytes, YAML validation skipped)",
                         )
                     except yaml.YAMLError as yaml_err:
                         print(
@@ -1059,7 +1086,6 @@ class StartupChecker:
     def check_disk_space(self, config) -> bool:
         """Check available disk space."""
         try:
-            import psutil
 
             directories = [
                 (config.directories.input, "Input"),
@@ -1080,7 +1106,7 @@ class StartupChecker:
             if low_space:
                 print(f"   Low disk space: {', '.join(low_space)}")
                 return False
-        except (ImportError, OSError) as e:
+        except OSError as e:
             print(f"   Disk space check failed: {e}")
             return False
         else:
@@ -1089,7 +1115,6 @@ class StartupChecker:
     def check_memory_availability(self) -> bool:
         """Check system memory availability."""
         try:
-            import psutil
 
             memory = psutil.virtual_memory()
             memory_gb = memory.total / (1024**3)
@@ -1102,7 +1127,7 @@ class StartupChecker:
             if available_gb < 2.0:
                 print("   Warning: Low memory may cause processing issues")
                 return False
-        except (ImportError, OSError) as e:
+        except OSError as e:
             print(f"   Memory check failed: {e}")
             return False
         else:
@@ -1179,8 +1204,6 @@ class StartupChecker:
     def check_network_connectivity(self) -> bool:
         """Check network connectivity for model downloads."""
         try:
-            import socket
-
             socket.create_connection(("8.8.8.8", 53), timeout=3)
         except (OSError, socket.timeout, ConnectionError):
             print("   No internet connectivity (model downloads may fail)")
@@ -1841,7 +1864,9 @@ class TranscriptionService:
     def _pre_check_cuda_setup(self) -> None:
         """Pre-check CUDA/cuDNN setup to catch issues early."""
         try:
-            import torch
+            if not TORCH_AVAILABLE:
+                self.logger.info("PyTorch not available - skipping CUDA checks")
+                return
 
             # Skip check if using CPU explicitly
             if self.config.transcription.whisper.device == "cpu":
@@ -1886,7 +1911,7 @@ class TranscriptionService:
                         cudnn_test_error,
                     )
 
-        except (ImportError, RuntimeError, OSError) as e:
+        except (RuntimeError, OSError) as e:
             self.logger.warning("CUDA pre-check failed: %s", e)
 
     def _setup_signal_handlers(self) -> None:
@@ -2254,12 +2279,14 @@ class TranscriptionService:
     def _log_runtime_environment(self) -> None:
         """Log runtime environment information."""
         try:
-            import torch
 
             self.logger.info("=== Runtime Environment ===")
             self.logger.info("🐍 Python version: %s", sys.version.split()[0])
             self.logger.info("💻 Platform: %s", sys.platform)
-            self.logger.info("🔧 PyTorch version: %s", torch.__version__)
+            if TORCH_AVAILABLE:
+                self.logger.info("🔧 PyTorch version: %s", torch.__version__)
+            else:
+                self.logger.info("🔧 PyTorch: Not available")
 
             # Memory information
             memory = psutil.virtual_memory()
@@ -2270,7 +2297,7 @@ class TranscriptionService:
             )
 
             # GPU information
-            if torch.cuda.is_available():
+            if TORCH_AVAILABLE and torch.cuda.is_available():
                 gpu_count = torch.cuda.device_count()
                 self.logger.info("🚀 GPU available: %d device(s)", gpu_count)
                 for i in range(gpu_count):
@@ -2364,21 +2391,16 @@ class TranscriptionService:
             )
 
             # GPU memory if available
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    for i in range(torch.cuda.device_count()):
-                        allocated = torch.cuda.memory_allocated(i) / (1024**3)
-                        reserved = torch.cuda.memory_reserved(i) / (1024**3)
-                        self.logger.info(
-                            "   GPU %d memory: %.1f GB allocated, %.1f GB reserved",
-                            i,
-                            allocated,
-                            reserved,
-                        )
-            except ImportError:
-                pass
+            if TORCH_AVAILABLE and torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    allocated = torch.cuda.memory_allocated(i) / (1024**3)
+                    reserved = torch.cuda.memory_reserved(i) / (1024**3)
+                    self.logger.info(
+                        "   GPU %d memory: %.1f GB allocated, %.1f GB reserved",
+                        i,
+                        allocated,
+                        reserved,
+                    )
 
         except Exception:
             self.logger.exception("Error gathering final system status")
@@ -2532,26 +2554,21 @@ async def _periodic_status_logger(service: TranscriptionService, interval: int) 
             )
 
             # GPU status if available
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    for i in range(torch.cuda.device_count()):
-                        torch.cuda.memory_allocated(i) / (1024**3)
-                        reserved = torch.cuda.memory_reserved(i) / (1024**3)
-                        total = torch.cuda.get_device_properties(i).total_memory / (
-                            1024**3
-                        )
-                        usage_percent = (reserved / total) * 100 if total > 0 else 0
-                        logger.info(
-                            "🚀 GPU %d: %.1fGB/%.1fGB (%.1f%%)",
-                            i,
-                            reserved,
-                            total,
-                            usage_percent,
-                        )
-            except ImportError:
-                pass
+            if TORCH_AVAILABLE and torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    torch.cuda.memory_allocated(i) / (1024**3)
+                    reserved = torch.cuda.memory_reserved(i) / (1024**3)
+                    total = torch.cuda.get_device_properties(i).total_memory / (
+                        1024**3
+                    )
+                    usage_percent = (reserved / total) * 100 if total > 0 else 0
+                    logger.info(
+                        "🚀 GPU %d: %.1fGB/%.1fGB (%.1f%%)",
+                        i,
+                        reserved,
+                        total,
+                        usage_percent,
+                    )
 
             # Error statistics
             error_stats = error_tracker.get_error_stats()
