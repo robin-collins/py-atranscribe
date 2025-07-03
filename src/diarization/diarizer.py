@@ -2,6 +2,7 @@
 
 Provides integration with transcription pipeline for speaker-labeled transcripts.
 """
+
 import logging
 import os
 from dataclasses import dataclass
@@ -45,7 +46,6 @@ class DiarizationResult:
     duration: float
     num_speakers: int
     confidence: float
-
 
 
 class Diarizer:
@@ -147,7 +147,7 @@ class Diarizer:
                     self.logger.warning(
                         "Insufficient GPU memory for diarization, using CPU",
                     )
-                    return "cpu" # noqa: TRY300
+                    return "cpu"  # noqa: TRY300
                 except Exception as e:  # BLE001: Broad except required to handle unexpected GPU check errors
                     self.logger.warning("Error checking GPU for diarization: %s", e)
                     return "cpu"
@@ -156,23 +156,24 @@ class Diarizer:
         return self.config.device
 
     @retry_on_error()
-    def diarize(self, audio_path: str) -> DiarizationResult:
+    def diarize(self, audio_path: str) -> DiarizationResult | None:
         """Perform speaker diarization on audio file.
 
         Args:
             audio_path: Path to audio file
 
         Returns:
-            DiarizationResult: Diarization results with speaker information
-
-        Raises:
-            ModelError: If diarization fails
+            DiarizationResult | None: Diarization results with speaker information, or None if diarization fails
 
         """
         if not self.config.enabled:
             # Return empty result if diarization is disabled
             return DiarizationResult(
-                speakers=[], segments=[], duration=0.0, num_speakers=0, confidence=0.0,
+                speakers=[],
+                segments=[],
+                duration=0.0,
+                num_speakers=0,
+                confidence=0.0,
             )
 
         if self.pipeline is None:
@@ -187,13 +188,36 @@ class Diarizer:
             duration = audio_info.num_frames / audio_info.sample_rate
 
             # Perform diarization
-            diarization_params = {
-                "min_speakers": self.config.min_speakers,
-                "max_speakers": self.config.max_speakers,
-            }
+            diarization_params = {}
+            if self.config.min_speakers is not None:
+                diarization_params["min_speakers"] = self.config.min_speakers
+            if self.config.max_speakers is not None:
+                diarization_params["max_speakers"] = self.config.max_speakers
 
-            # Apply the pipeline
-            diarization = self.pipeline(audio_path, **diarization_params)
+            # Apply the pipeline with error handling
+            try:
+                diarization = self.pipeline(audio_path, **diarization_params)
+            except Exception as e:
+                self.logger.warning("Diarization pipeline failed: %s", e)
+                # Try without speaker constraints
+                if diarization_params:
+                    self.logger.info("Retrying diarization without speaker constraints")
+                    diarization = self.pipeline(audio_path)
+                else:
+                    raise
+
+            # Validate diarization results
+            if diarization is None or len(diarization) == 0:
+                self.logger.warning(
+                    "Diarization produced no results for %s", audio_path
+                )
+                return DiarizationResult(
+                    speakers=[],
+                    segments=[],
+                    duration=duration,
+                    num_speakers=0,
+                    confidence=0.0,
+                )
 
             # Process results
             speakers = self._extract_speakers(diarization, duration)
@@ -214,13 +238,13 @@ class Diarizer:
             )
         except Exception as e:
             self.logger.exception("Diarization failed for %s", audio_path)
-            msg = f"Diarization failed: {e}"
-            raise ModelError(msg) from e
-        else:
-            return result
+            # Return None on failure to allow graceful degradation
+            return None
 
     def _extract_speakers(
-        self, diarization: Annotation, total_duration: float,
+        self,
+        diarization: Annotation,
+        total_duration: float,
     ) -> list[Speaker]:
         """Extract speaker information from diarization annotation.
 
@@ -234,33 +258,38 @@ class Diarizer:
         """
         speakers = {}
 
-        for segment, _, speaker_label in diarization.itertracks(yield_label=True):
-            speaker_id = str(speaker_label)
+        try:
+            for segment, _, speaker_label in diarization.itertracks(yield_label=True):
+                speaker_id = str(speaker_label)
 
-            if speaker_id not in speakers:
-                speakers[speaker_id] = {
-                    "segments": [],
-                    "total_duration": 0.0,
-                }
+                if speaker_id not in speakers:
+                    speakers[speaker_id] = {
+                        "segments": [],
+                        "total_duration": 0.0,
+                    }
 
-            speakers[speaker_id]["segments"].append((segment.start, segment.end))
-            speakers[speaker_id]["total_duration"] += segment.duration
+                speakers[speaker_id]["segments"].append((segment.start, segment.end))
+                speakers[speaker_id]["total_duration"] += segment.duration
 
-        # Create Speaker objects
-        speaker_list = []
-        for i, (speaker_id, info) in enumerate(sorted(speakers.items())):
-            speaker = Speaker(
-                id=speaker_id,
-                label=f"SPEAKER_{i:02d}",
-                segments=info["segments"],
-                total_duration=info["total_duration"],
-                confidence=info["total_duration"] / total_duration
-                if total_duration > 0
-                else 0.0,
-            )
-            speaker_list.append(speaker)
+            # Create Speaker objects
+            speaker_list = []
+            for i, (speaker_id, info) in enumerate(sorted(speakers.items())):
+                speaker = Speaker(
+                    id=speaker_id,
+                    label=f"SPEAKER_{i:02d}",
+                    segments=info["segments"],
+                    total_duration=info["total_duration"],
+                    confidence=info["total_duration"] / total_duration
+                    if total_duration > 0
+                    else 0.0,
+                )
+                speaker_list.append(speaker)
 
-        return speaker_list
+            return speaker_list
+
+        except Exception as e:
+            self.logger.warning("Error extracting speakers: %s", e)
+            return []
 
     def _create_segments(self, diarization: Annotation) -> list[dict[str, Any]]:
         """Create time-based segments with speaker labels.
@@ -274,27 +303,39 @@ class Diarizer:
         """
         segments = []
 
-        for segment, _, speaker_label in diarization.itertracks(yield_label=True):
-            segment_dict = {
-                "start": segment.start,
-                "end": segment.end,
-                "duration": segment.duration,
-                "speaker": str(speaker_label),
-                "speaker_label": f"SPEAKER_{self._get_speaker_index(str(speaker_label), diarization):02d}",
-            }
-            segments.append(segment_dict)
+        try:
+            for segment, _, speaker_label in diarization.itertracks(yield_label=True):
+                segment_dict = {
+                    "start": segment.start,
+                    "end": segment.end,
+                    "duration": segment.duration,
+                    "speaker": str(speaker_label),
+                    "speaker_label": f"SPEAKER_{self._get_speaker_index(str(speaker_label), diarization):02d}",
+                }
+                segments.append(segment_dict)
 
-        # Sort segments by start time
-        segments.sort(key=lambda x: x["start"])
+            # Sort segments by start time
+            segments.sort(key=lambda x: x["start"])
 
-        return segments
+            return segments
+
+        except Exception as e:
+            self.logger.warning("Error creating segments: %s", e)
+            return []
 
     def _get_speaker_index(self, speaker_id: str, diarization: Annotation) -> int:
         """Get consistent speaker index for labeling."""
-        unique_speakers = sorted(
-            {str(label) for _, _, label in diarization.itertracks(yield_label=True)},
-        )
-        return unique_speakers.index(speaker_id)
+        try:
+            unique_speakers = sorted(
+                {
+                    str(label)
+                    for _, _, label in diarization.itertracks(yield_label=True)
+                },
+            )
+            return unique_speakers.index(speaker_id)
+        except (ValueError, Exception):
+            # Return 0 as fallback if speaker_id not found or other error
+            return 0
 
     def _calculate_confidence(self, diarization: Annotation) -> float:
         """Calculate overall confidence score for diarization.
@@ -306,33 +347,39 @@ class Diarizer:
             Confidence score between 0 and 1
 
         """
-        if len(diarization) == 0:
+        try:
+            if len(diarization) == 0:
+                return 0.0
+
+            # Simple confidence based on coverage - with defensive programming
+            total_duration = 0.0
+            for segment, _, _ in diarization.itertracks(yield_label=True):
+                total_duration += segment.duration
+
+            if total_duration == 0:
+                return 0.0
+
+            # Calculate confidence based on segment consistency
+            speaker_durations = {}
+            for segment, _, speaker in diarization.itertracks(yield_label=True):
+                speaker_id = str(speaker)
+                if speaker_id not in speaker_durations:
+                    speaker_durations[speaker_id] = 0.0
+                speaker_durations[speaker_id] += segment.duration
+
+            # Confidence is higher when speakers have more balanced speaking time
+            if len(speaker_durations) <= 1:
+                return 0.8  # Single speaker is usually reliable
+
+            durations = list(speaker_durations.values())
+            balance_score = min(durations) / max(durations) if max(durations) > 0 else 0
+            coverage_score = min(1.0, total_duration / 60.0)  # Normalize by 60 seconds
+
+            return balance_score * 0.6 + coverage_score * 0.4
+
+        except Exception as e:
+            self.logger.warning("Error calculating confidence: %s", e)
             return 0.0
-
-        # Simple confidence based on coverage
-        total_duration = sum(
-            segment.duration for segment, _, _ in diarization.itertracks()
-        )
-        if total_duration == 0:
-            return 0.0
-
-        # Calculate confidence based on segment consistency
-        speaker_durations = {}
-        for segment, _, speaker in diarization.itertracks(yield_label=True):
-            speaker_id = str(speaker)
-            if speaker_id not in speaker_durations:
-                speaker_durations[speaker_id] = 0.0
-            speaker_durations[speaker_id] += segment.duration
-
-        # Confidence is higher when speakers have more balanced speaking time
-        if len(speaker_durations) <= 1:
-            return 0.8  # Single speaker is usually reliable
-
-        durations = list(speaker_durations.values())
-        balance_score = min(durations) / max(durations) if max(durations) > 0 else 0
-        coverage_score = min(1.0, total_duration / 60.0)  # Normalize by 60 seconds
-
-        return balance_score * 0.6 + coverage_score * 0.4
 
     def assign_speakers_to_segments(
         self,
@@ -399,12 +446,14 @@ class Diarizer:
             labeled_segments.append(labeled_segment)
 
         self.logger.debug(
-            "Assigned speakers to %d transcription segments", len(labeled_segments),
+            "Assigned speakers to %d transcription segments",
+            len(labeled_segments),
         )
         return labeled_segments
 
     def get_speaker_statistics(
-        self, diarization_result: DiarizationResult,
+        self,
+        diarization_result: DiarizationResult,
     ) -> dict[str, Any]:
         """Get statistics about detected speakers.
 

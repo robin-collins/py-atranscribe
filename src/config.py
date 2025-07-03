@@ -18,10 +18,12 @@ class DirectoriesConfig(BaseModel):
     """Directory configuration for input, output, backup, and temporary files."""
 
     input: Path = Field(
-        default=Path("/data/in"), description="Input directory for audio files",
+        default=Path("/data/in"),
+        description="Input directory for audio files",
     )
     output: Path = Field(
-        default=Path("/data/out"), description="Output directory for transcripts",
+        default=Path("/data/out"),
+        description="Output directory for transcripts",
     )
     backup: Path = Field(
         default=Path("/data/backup"),
@@ -74,10 +76,14 @@ class FileMonitoringConfig(BaseModel):
         description="Supported audio/video file formats",
     )
     stability_delay: float = Field(
-        default=5.0, ge=0, description="Seconds to wait before processing new files",
+        default=5.0,
+        ge=0,
+        description="Seconds to wait before processing new files",
     )
     poll_interval: float = Field(
-        default=1.0, ge=0.1, description="File monitoring poll interval in seconds",
+        default=1.0,
+        ge=0.1,
+        description="File monitoring poll interval in seconds",
     )
 
 
@@ -86,16 +92,23 @@ class WhisperConfig(BaseModel):
 
     model_size: str = Field(default="medium", description="Whisper model size")
     device: str = Field(
-        default="auto", description="Device for inference (auto, cpu, cuda)",
+        default="auto",
+        description="Device for inference (auto, cpu, cuda)",
     )
     compute_type: str = Field(
         default="auto",
         description="Compute type (auto, int8, int16, float16, float32)",
     )
     cpu_threads: int = Field(
-        default=0, ge=0, description="Number of CPU threads (0 = auto)",
+        default=0,
+        ge=0,
+        description="Number of CPU threads (0 = auto)",
     )
     num_workers: int = Field(default=1, ge=1, description="Number of parallel workers")
+    initial_prompt: str | None = Field(
+        default=None,
+        description="Initial prompt to guide transcription",
+    )
 
     @field_validator("model_size")
     @classmethod
@@ -130,16 +143,23 @@ class PreprocessingConfig(BaseModel):
     """Audio preprocessing configuration."""
 
     enable_vad: bool = Field(
-        default=True, description="Enable Voice Activity Detection",
+        default=True,
+        description="Enable Voice Activity Detection",
     )
     vad_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="VAD confidence threshold",
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="VAD confidence threshold",
     )
     enable_bgm_separation: bool = Field(
-        default=False, description="Enable background music separation",
+        default=False,
+        description="Enable background music separation",
     )
     chunk_length_s: int = Field(
-        default=30, ge=1, description="Audio chunk duration for processing",
+        default=30,
+        ge=1,
+        description="Audio chunk duration for processing",
     )
 
 
@@ -163,17 +183,22 @@ class DiarizationConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable speaker diarization")
     hf_token: str | None = Field(
-        default=None, description="HuggingFace token for model access",
+        default=None,
+        description="HuggingFace token for model access",
     )
     model: str = Field(
-        default="pyannote/speaker-diarization-3.1", description="Diarization model",
+        default="pyannote/speaker-diarization-3.1",
+        description="Diarization model",
     )
     device: str = Field(
-        default="auto", description="Device for diarization (auto, cpu, cuda)",
+        default="auto",
+        description="Device for diarization (auto, cpu, cuda)",
     )
     min_speakers: int = Field(default=1, ge=1, description="Minimum number of speakers")
     max_speakers: int = Field(
-        default=10, ge=1, description="Maximum number of speakers",
+        default=10,
+        ge=1,
+        description="Maximum number of speakers",
     )
     embedding_model: str = Field(
         default="pyannote/wespeaker-voxceleb-resnet34-LM",
@@ -186,13 +211,19 @@ class RetryConfig(BaseModel):
 
     max_attempts: int = Field(default=3, ge=1, description="Maximum retry attempts")
     base_delay: float = Field(
-        default=1.0, ge=0, description="Base delay between retries",
+        default=1.0,
+        ge=0,
+        description="Base delay between retries",
     )
     max_delay: float = Field(
-        default=60.0, ge=0, description="Maximum delay between retries",
+        default=60.0,
+        ge=0,
+        description="Maximum delay between retries",
     )
     exponential_base: float = Field(
-        default=2.0, ge=1.0, description="Exponential backoff base",
+        default=2.0,
+        ge=1.0,
+        description="Exponential backoff base",
     )
     jitter: bool = Field(default=True, description="Add random jitter to retry delays")
 
@@ -201,19 +232,29 @@ class PerformanceConfig(BaseModel):
     """Performance optimization configuration."""
 
     max_memory_usage_gb: float = Field(
-        default=8.0, ge=0.5, description="Maximum memory usage limit",
+        default=8.0,
+        ge=0.5,
+        description="Maximum memory usage limit",
     )
     enable_model_offload: bool = Field(
-        default=True, description="Enable model offloading to save GPU memory",
+        default=True,
+        description="Enable model offloading to save GPU memory",
     )
     gpu_memory_fraction: float = Field(
-        default=0.8, ge=0.1, le=1.0, description="Fraction of GPU memory to use",
+        default=0.8,
+        ge=0.1,
+        le=1.0,
+        description="Fraction of GPU memory to use",
     )
     max_concurrent_files: int = Field(
-        default=2, ge=1, description="Maximum concurrent file processing",
+        default=2,
+        ge=1,
+        description="Maximum concurrent file processing",
     )
     batch_size: int = Field(
-        default=16, ge=1, description="Batch size for model inference",
+        default=16,
+        ge=1,
+        description="Batch size for model inference",
     )
     retry: RetryConfig = Field(default_factory=RetryConfig)
 
@@ -226,7 +267,8 @@ class PostProcessingConfig(BaseModel):
         description="Action to take after processing (move, delete, keep)",
     )
     backup_structure: str = Field(
-        default="date", description="Backup directory structure (flat, date, original)",
+        default="date",
+        description="Backup directory structure (flat, date, original)",
     )
 
     @field_validator("action")
@@ -255,11 +297,13 @@ class LoggingConfig(BaseModel):
 
     level: str = Field(default="INFO", description="Logging level")
     format: str = Field(
-        default="structured", description="Log format (structured or plain)",
+        default="structured",
+        description="Log format (structured or plain)",
     )
     file_enabled: bool = Field(default=False, description="Enable file logging")
     file_path: Path = Field(
-        default=Path("/var/log/transcribe.log"), description="Log file path",
+        default=Path("/var/log/transcribe.log"),
+        description="Log file path",
     )
 
     @field_validator("level")
@@ -280,13 +324,20 @@ class HealthCheckConfig(BaseModel):
     port: int = Field(default=8000, ge=1, le=65535, description="Health check port")
     host: str = Field(default="127.0.0.1", description="Health check host")
     disk_space_min_gb: float = Field(
-        default=1.0, ge=0, description="Minimum disk space threshold",
+        default=1.0,
+        ge=0,
+        description="Minimum disk space threshold",
     )
     memory_usage_max_percent: float = Field(
-        default=90.0, ge=0, le=100, description="Maximum memory usage threshold",
+        default=90.0,
+        ge=0,
+        le=100,
+        description="Maximum memory usage threshold",
     )
     queue_size_max: int = Field(
-        default=100, ge=1, description="Maximum processing queue size",
+        default=100,
+        ge=1,
+        description="Maximum processing queue size",
     )
 
 
@@ -296,10 +347,14 @@ class MetricsConfig(BaseModel):
     enabled: bool = Field(default=False, description="Enable Prometheus metrics")
     port: int = Field(default=9090, ge=1, le=65535, description="Metrics port")
     system_metrics_interval: int = Field(
-        default=30, ge=1, description="System metrics collection interval",
+        default=30,
+        ge=1,
+        description="System metrics collection interval",
     )
     processing_metrics_interval: int = Field(
-        default=10, ge=1, description="Processing metrics collection interval",
+        default=10,
+        ge=1,
+        description="Processing metrics collection interval",
     )
 
 

@@ -24,7 +24,6 @@ from src.utils.error_handling import (
     retry_on_error,
 )
 from src.utils.file_handler import FileHandler
-from src.utils.output_formatter import OutputFormatter
 
 
 @dataclass
@@ -75,6 +74,7 @@ class BatchTranscriber:
         self.whisper_factory = WhisperFactory()
         self.diarizer = Diarizer(config.diarization)
         self.subtitle_manager = SubtitleManager()
+        self.file_handler = FileHandler()
 
         # Processing state
         self._whisper_inference: FasterWhisperInference | None = None
@@ -143,7 +143,9 @@ class BatchTranscriber:
         try:
             self.logger.info("Starting processing of: %s", file_path)
             report_progress(
-                "initialization", 0.0, f"Starting processing of {file_path.name}",
+                "initialization",
+                0.0,
+                f"Starting processing of {file_path.name}",
             )
 
             # Validate input file
@@ -182,20 +184,30 @@ class BatchTranscriber:
             ):
                 report_progress("diarization", 0.5, "Starting speaker diarization...")
                 diarization_result = await self._perform_diarization(file_path)
-                report_progress(
-                    "diarization",
-                    0.7,
-                    f"Diarization completed: {diarization_result.num_speakers} speakers",
-                )
+                if diarization_result is not None:
+                    report_progress(
+                        "diarization",
+                        0.7,
+                        f"Diarization completed: {diarization_result.num_speakers} speakers",
+                    )
+                else:
+                    report_progress(
+                        "diarization",
+                        0.7,
+                        "Diarization failed, continuing without speaker labels",
+                    )
             else:
                 report_progress("diarization", 0.7, "Diarization skipped")
 
             # Stage 3: Merge transcription and diarization
             report_progress(
-                "merging", 0.75, "Merging transcription and diarization results...",
+                "merging",
+                0.75,
+                "Merging transcription and diarization results...",
             )
             labeled_segments = self._merge_results(
-                transcription_result, diarization_result,
+                transcription_result,
+                diarization_result,
             )
 
             # Stage 4: Generate outputs
@@ -220,16 +232,21 @@ class BatchTranscriber:
             # Update statistics
             self._processing_stats["files_processed"] += 1
             self._processing_stats["total_duration"] += transcription_result.get(
-                "duration", 0,
+                "duration",
+                0,
             )
             self._processing_stats["total_processing_time"] += processing_time
 
             report_progress(
-                "completed", 1.0, f"Processing completed in {processing_time:.2f}s",
+                "completed",
+                1.0,
+                f"Processing completed in {processing_time:.2f}s",
             )
 
             self.logger.info(
-                "Successfully processed %s in %.2fs", file_path, processing_time,
+                "Successfully processed %s in %.2fs",
+                file_path,
+                processing_time,
             )
 
             return ProcessingResult(
@@ -287,14 +304,22 @@ class BatchTranscriber:
                 "log_prob_threshold": -1.0,  # Filter out segments with low probability
                 "no_speech_threshold": 0.6,  # Filter out segments without speech
                 "word_timestamps": True,  # Enable word-level timestamps
-                "prepend_punctuations": '"\'([{-',
-                "append_punctuations": '"\'.,:)]}',
+                "prepend_punctuations": "\"'([{-",
+                "append_punctuations": "\"'.,:)]}",
             }
 
             # Run transcription in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
+
+            # Create a wrapper function to handle keyword arguments
+            def transcribe_with_params():
+                return self._whisper_inference.transcribe(
+                    str(file_path), **transcribe_params
+                )
+
             segments_list, transcription_info = await loop.run_in_executor(
-                None, self._whisper_inference.transcribe, str(file_path), **transcribe_params
+                None,
+                transcribe_with_params,
             )
 
             # Convert segments to the expected format
@@ -303,14 +328,14 @@ class BatchTranscriber:
 
             for segment in segments_list:
                 segment_dict = {
-                    "id": getattr(segment, 'id', len(processed_segments)),
+                    "id": getattr(segment, "id", len(processed_segments)),
                     "start": segment.start,
                     "end": segment.end,
                     "text": segment.text.strip(),
                     "words": [],
-                    "avg_logprob": getattr(segment, 'avg_logprob', 0.0),
-                    "no_speech_prob": getattr(segment, 'no_speech_prob', 0.0),
-                    "compression_ratio": getattr(segment, 'compression_ratio', 0.0),
+                    "avg_logprob": getattr(segment, "avg_logprob", 0.0),
+                    "no_speech_prob": getattr(segment, "no_speech_prob", 0.0),
+                    "compression_ratio": getattr(segment, "compression_ratio", 0.0),
                 }
 
                 # Add word-level information if available
@@ -320,7 +345,7 @@ class BatchTranscriber:
                             "start": word.start,
                             "end": word.end,
                             "word": word.word,
-                            "probability": getattr(word, 'probability', 1.0),
+                            "probability": getattr(word, "probability", 1.0),
                         }
                         segment_dict["words"].append(word_dict)
 
@@ -331,9 +356,13 @@ class BatchTranscriber:
             result = {
                 "segments": processed_segments,
                 "language": transcription_info.get("language"),
-                "language_probability": transcription_info.get("language_probability", 1.0),
+                "language_probability": transcription_info.get(
+                    "language_probability", 1.0
+                ),
                 "duration": transcription_info.get("duration", total_duration),
-                "duration_after_vad": transcription_info.get("duration", total_duration),
+                "duration_after_vad": transcription_info.get(
+                    "duration", total_duration
+                ),
                 "transcription_info": {
                     "model_size": self.config.transcription.whisper.model_size,
                     "compute_type": self.config.transcription.whisper.compute_type,
@@ -356,7 +385,9 @@ class BatchTranscriber:
         except Exception as e:
             self.logger.exception("Transcription failed for %s", file_path)
             # Re-raise as AudioProcessingError to be handled by the error handling system
-            raise AudioProcessingError(f"Transcription failed for {file_path}: {e}") from e
+            raise AudioProcessingError(
+                f"Transcription failed for {file_path}: {e}"
+            ) from e
 
     async def _perform_diarization(self, file_path: Path) -> DiarizationResult | None:
         """Perform speaker diarization."""
@@ -367,18 +398,23 @@ class BatchTranscriber:
             # Run diarization in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
-                None, self.diarizer.diarize, str(file_path),
+                None,
+                self.diarizer.diarize,
+                str(file_path),
             )
-
 
         except ExceptionGroup as e:
             self.logger.warning(
-                "Diarization failed for %s, continuing without speaker labels: %s", file_path, e,
+                "Diarization failed for %s, continuing without speaker labels: %s",
+                file_path,
+                e,
             )
             return None
         except Exception as e:  # noqa: BLE001
             self.logger.warning(
-                "Diarization failed for %s, continuing without speaker labels: %s", file_path, e,
+                "Diarization failed for %s, continuing without speaker labels: %s",
+                file_path,
+                e,
             )
             return None
 
@@ -393,7 +429,8 @@ class BatchTranscriber:
         if diarization_result and diarization_result.speakers:
             # Assign speakers to transcription segments
             segments = self.diarizer.assign_speakers_to_segments(
-                segments, diarization_result,
+                segments,
+                diarization_result,
             )
         else:
             # Add default speaker labels
@@ -412,9 +449,11 @@ class BatchTranscriber:
             min_duration=0.5,  # Merge very short segments
         )
 
-
     async def _generate_outputs(
-        self, input_path: Path, segments: list[dict[str, Any]], metadata: dict[str, Any],
+        self,
+        input_path: Path,
+        segments: list[dict[str, Any]],
+        metadata: dict[str, Any],
     ) -> dict[str, Path]:
         """Generate output files in multiple formats."""
         try:
@@ -432,7 +471,6 @@ class BatchTranscriber:
                 formats=self.config.transcription.output_formats,
                 metadata=metadata,
             )
-
 
         except Exception as e:
             self.logger.exception("Failed to generate outputs for %s", input_path)
@@ -463,17 +501,11 @@ class BatchTranscriber:
                 backup_dir.mkdir(parents=True, exist_ok=True)
                 backup_path = backup_dir / file_path.name
 
-                # Handle filename conflicts
-                counter = 1
-                original_backup_path = backup_path
-                while backup_path.exists():
-                    stem = original_backup_path.stem
-                    suffix = original_backup_path.suffix
-                    backup_path = backup_dir / f"{stem}_{counter}{suffix}"
-                    counter += 1
-
-                file_path.rename(backup_path)
-                self.logger.info("Moved input file to backup: %s", backup_path)
+                # Use FileHandler's safe_move_file method which handles cross-device moves
+                final_backup_path = self.file_handler.safe_move_file(
+                    file_path, backup_path
+                )
+                self.logger.info("Moved input file to backup: %s", final_backup_path)
 
             elif action == "keep":
                 self.logger.debug("Keeping input file: %s", file_path)
@@ -485,7 +517,8 @@ class BatchTranscriber:
             # Don't raise exception for post-processing failures
 
     def _get_diarization_info(
-        self, diarization_result: DiarizationResult | None,
+        self,
+        diarization_result: DiarizationResult | None,
     ) -> dict[str, Any] | None:
         """Extract diarization information for metadata."""
         if not diarization_result:
@@ -550,7 +583,7 @@ class BatchTranscriber:
 
             # Clean up whisper inference
             if self._whisper_inference:
-                if hasattr(self._whisper_inference, 'cleanup'):
+                if hasattr(self._whisper_inference, "cleanup"):
                     self._whisper_inference.cleanup()
                 self._whisper_inference = None
 

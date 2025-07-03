@@ -21,7 +21,8 @@
 │  │  └── whisper_factory.py
 │  ├── utils/
 │  │  ├── __init__.py
-│  │  └── error_handling.py
+│  │  ├── error_handling.py
+│  │  └── file_handler.py
 │  ├── __init__.py
 │  └── config.py
 ├── tests/
@@ -102,7 +103,8 @@ src/
 │   └── whisper_factory.py             # Whisper model factory and inference wrapper
 └── utils/                             # Utility modules
     ├── __init__.py
-    └── error_handling.py              # Comprehensive error handling and retry logic
+    ├── error_handling.py              # Comprehensive error handling and retry logic
+    └── file_handler.py                # File handling utilities with media type detection
 ```
 
 ## Test Structure (`tests/`)

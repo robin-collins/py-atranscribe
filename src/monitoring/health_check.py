@@ -5,6 +5,7 @@ Provides system status, resource monitoring, and service health information.
 
 import asyncio
 import logging
+import os
 import time
 from datetime import UTC, datetime, timezone
 from typing import Any
@@ -34,6 +35,7 @@ class HealthChecker:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.start_time = time.time()
+        self._processing_queue_ref = None
 
         # Service status tracking
         self._service_status = {
@@ -64,23 +66,40 @@ class HealthChecker:
     def _register_health_endpoint(self) -> None:
         @self.app.get("/health")
         async def health_check() -> JSONResponse:
-            """Perform health check.
+            """Perform basic health check.
 
             Return 200 if service is healthy, 503 if unhealthy.
+            Returns simple healthy/unhealthy status.
             """
             try:
                 health_data = await self.get_health_status()
 
+                # Simple response for basic health check
+                simple_response = {
+                    "status": health_data["overall_status"],
+                    "timestamp": health_data["timestamp"],
+                    "uptime_seconds": health_data["uptime_seconds"],
+                }
+
                 if health_data["overall_status"] == "healthy":
-                    return JSONResponse(status_code=200, content=health_data)
-                return JSONResponse(status_code=503, content=health_data)
+                    return JSONResponse(status_code=200, content=simple_response)
+                else:
+                    # Include basic error info for unhealthy status
+                    simple_response["issues"] = []
+                    for check_name, check_status in health_data["checks"].items():
+                        if check_status not in ["healthy", "running", "initialized"]:
+                            simple_response["issues"].append(
+                                f"{check_name}: {check_status}"
+                            )
+
+                    return JSONResponse(status_code=503, content=simple_response)
 
             except Exception as exc:
                 self.logger.exception("Health check failed")
                 return JSONResponse(
                     status_code=503,
                     content={
-                        "overall_status": "unhealthy",
+                        "status": "unhealthy",
                         "error": str(exc),
                         "timestamp": datetime.now(UTC).isoformat(),
                     },
@@ -113,7 +132,7 @@ class HealthChecker:
     def _register_detailed_endpoint(self) -> None:
         @self.app.get("/health/detailed")
         async def detailed_health() -> JSONResponse:
-            """Return detailed health information including resource usage and statistics."""
+            """Return comprehensive health information including resource usage and statistics."""
             try:
                 detailed_health_info = await self.get_detailed_health()
                 return JSONResponse(content=detailed_health_info)
@@ -191,46 +210,174 @@ class HealthChecker:
                 "cpu_count": psutil.cpu_count(),
                 "cpu_percent": psutil.cpu_percent(interval=1),
                 "memory": {
-                    "total_gb": memory_info.total / (1024**3),
-                    "available_gb": memory_info.available / (1024**3),
-                    "used_percent": memory_info.percent,
+                    "total_gb": round(memory_info.total / (1024**3), 2),
+                    "available_gb": round(memory_info.available / (1024**3), 2),
+                    "used_gb": round(memory_info.used / (1024**3), 2),
+                    "used_percent": round(memory_info.percent, 1),
+                    "free_gb": round(
+                        (memory_info.total - memory_info.used) / (1024**3), 2
+                    ),
                 },
                 "disk": {
-                    "total_gb": disk_info.total / (1024**3),
-                    "free_gb": disk_info.free / (1024**3),
-                    "used_percent": (disk_info.used / disk_info.total) * 100,
+                    "total_gb": round(disk_info.total / (1024**3), 2),
+                    "free_gb": round(disk_info.free / (1024**3), 2),
+                    "used_gb": round(disk_info.used / (1024**3), 2),
+                    "used_percent": round((disk_info.used / disk_info.total) * 100, 1),
                 },
+                "load_average": list(psutil.getloadavg())
+                if hasattr(psutil, "getloadavg")
+                else None,
+                "boot_time": psutil.boot_time(),
             },
             "configuration": {
                 "input_directory": str(self.config.directories.input),
                 "output_directory": str(self.config.directories.output),
+                "backup_directory": str(self.config.directories.backup),
+                "temp_directory": str(self.config.directories.temp),
                 "supported_formats": self.config.monitoring.supported_formats,
                 "whisper_model": self.config.transcription.whisper.model_size,
+                "whisper_device": self.config.transcription.whisper.device,
+                "whisper_compute_type": self.config.transcription.whisper.compute_type,
                 "diarization_enabled": self.config.diarization.enabled,
+                "diarization_model": self.config.diarization.model
+                if self.config.diarization.enabled
+                else None,
                 "output_formats": self.config.transcription.output_formats,
+                "stability_delay": self.config.monitoring.stability_delay,
+                "poll_interval": self.config.monitoring.poll_interval,
+                "max_concurrent_files": self.config.performance.max_concurrent_files,
+                "post_processing_action": self.config.post_processing.action,
+                "logging_level": self.config.logging.level,
+                "health_check_enabled": self.config.health_check.enabled,
             },
             "error_statistics": error_tracker.get_error_stats(),
+            "process_info": {
+                "pid": os.getpid(),
+                "parent_pid": os.getppid(),
+                "cpu_percent": psutil.Process().cpu_percent(),
+                "memory_info": {
+                    "rss_mb": round(psutil.Process().memory_info().rss / (1024**2), 1),
+                    "vms_mb": round(psutil.Process().memory_info().vms / (1024**2), 1),
+                    "percent": round(psutil.Process().memory_percent(), 1),
+                },
+                "num_threads": psutil.Process().num_threads(),
+                "create_time": psutil.Process().create_time(),
+            },
         }
+
+        # Add detailed directory information
+        detailed["directories"] = {}
+        for name, path in [
+            ("input", self.config.directories.input),
+            ("output", self.config.directories.output),
+            ("backup", self.config.directories.backup),
+            ("temp", self.config.directories.temp),
+        ]:
+            if path.exists():
+                try:
+                    disk_usage = psutil.disk_usage(str(path))
+                    file_count = len(list(path.iterdir())) if path.is_dir() else 0
+                    detailed["directories"][name] = {
+                        "path": str(path),
+                        "exists": True,
+                        "is_directory": path.is_dir(),
+                        "file_count": file_count,
+                        "disk_usage": {
+                            "total_gb": round(disk_usage.total / (1024**3), 2),
+                            "free_gb": round(disk_usage.free / (1024**3), 2),
+                            "used_percent": round(
+                                (disk_usage.used / disk_usage.total) * 100, 1
+                            ),
+                        },
+                    }
+                except Exception as e:
+                    detailed["directories"][name] = {
+                        "path": str(path),
+                        "exists": True,
+                        "error": str(e),
+                    }
+            else:
+                detailed["directories"][name] = {
+                    "path": str(path),
+                    "exists": False,
+                }
 
         # Add GPU information if available
         try:
             import torch  # noqa: PLC0415
 
             if torch.cuda.is_available():
-                detailed["system"]["gpu"] = {
+                gpu_info = {
                     "available": True,
                     "device_count": torch.cuda.device_count(),
                     "current_device": torch.cuda.current_device(),
-                    "device_name": torch.cuda.get_device_name(0),
-                    "memory_allocated_gb": torch.cuda.memory_allocated(0) / (1024**3),
-                    "memory_reserved_gb": torch.cuda.memory_reserved(0) / (1024**3),
+                    "devices": [],
                 }
+
+                for i in range(torch.cuda.device_count()):
+                    device_props = torch.cuda.get_device_properties(i)
+                    gpu_info["devices"].append(
+                        {
+                            "id": i,
+                            "name": device_props.name,
+                            "total_memory_gb": round(
+                                device_props.total_memory / (1024**3), 2
+                            ),
+                            "memory_allocated_gb": round(
+                                torch.cuda.memory_allocated(i) / (1024**3), 2
+                            ),
+                            "memory_reserved_gb": round(
+                                torch.cuda.memory_reserved(i) / (1024**3), 2
+                            ),
+                            "memory_usage_percent": round(
+                                (
+                                    torch.cuda.memory_allocated(i)
+                                    / device_props.total_memory
+                                )
+                                * 100,
+                                1,
+                            ),
+                            "major": device_props.major,
+                            "minor": device_props.minor,
+                            "multi_processor_count": device_props.multi_processor_count,
+                        }
+                    )
+
+                detailed["system"]["gpu"] = gpu_info
             else:
-                detailed["system"]["gpu"] = {"available": False}
+                detailed["system"]["gpu"] = {
+                    "available": False,
+                    "reason": "CUDA not available",
+                }
         except ImportError:
             detailed["system"]["gpu"] = {
                 "available": False,
                 "error": "PyTorch not available",
+            }
+        except Exception as e:
+            detailed["system"]["gpu"] = {
+                "available": False,
+                "error": str(e),
+            }
+
+        # Add queue status if available
+        if self._processing_queue_ref:
+            try:
+                queue_status = await self._processing_queue_ref.get_status()
+                detailed["processing_queue"] = {
+                    "queued": queue_status.get("queued", 0),
+                    "processing": queue_status.get("processing", 0),
+                    "max_size": queue_status.get("max_size", 0),
+                    "total_items": queue_status.get("queued", 0)
+                    + queue_status.get("processing", 0),
+                }
+            except Exception as e:
+                detailed["processing_queue"] = {
+                    "error": str(e),
+                }
+        else:
+            detailed["processing_queue"] = {
+                "status": "not_connected",
             }
 
         return detailed
@@ -340,8 +487,13 @@ class HealthChecker:
             memory_info = psutil.virtual_memory()
 
             for _ in range(1):
-                if memory_info.percent > self.config.health_check.memory_usage_max_percent:
-                    self.logger.warning("High memory usage: %.1f%%", memory_info.percent)
+                if (
+                    memory_info.percent
+                    > self.config.health_check.memory_usage_max_percent
+                ):
+                    self.logger.warning(
+                        "High memory usage: %.1f%%", memory_info.percent
+                    )
                     return False
             return True
 
@@ -350,15 +502,33 @@ class HealthChecker:
             return False
 
     async def check_processing_queue(self) -> bool:
-        """Check if processing queue is healthy.
+        """Check if processing queue is healthy."""
+        try:
+            if self._processing_queue_ref:
+                queue_status = await self._processing_queue_ref.get_status()
+                queue_size = queue_status.get("queued", 0) + queue_status.get(
+                    "processing", 0
+                )
 
-        Returns:
-            bool: True if queue is healthy
+                # Check if queue is too large
+                if queue_size > self.config.health_check.queue_size_max:
+                    self.logger.warning(
+                        "Processing queue too large: %d items", queue_size
+                    )
+                    return False
 
-        """
-        # This would need to be connected to the actual processing queue
-        # For now, return True as a placeholder
-        return True
+                return True
+
+            # If no queue reference, assume healthy
+            return True
+
+        except Exception as e:
+            self.logger.warning("Error checking processing queue: %s", e)
+            return False
+
+    def set_processing_queue_ref(self, processing_queue) -> None:
+        """Set reference to processing queue for health checks."""
+        self._processing_queue_ref = processing_queue
 
     def update_service_status(self, status: str, **kwargs: object) -> None:
         """Update service status.

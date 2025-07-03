@@ -81,27 +81,34 @@ class SubtitleManager:
             try:
                 if format_name.lower() == "srt":
                     file_path = self._save_srt(
-                        transcript_segments, output_path.with_suffix(".srt"),
+                        transcript_segments,
+                        output_path.with_suffix(".srt"),
                     )
                 elif format_name.lower() == "webvtt":
                     file_path = self._save_webvtt(
-                        transcript_segments, output_path.with_suffix(".vtt"),
+                        transcript_segments,
+                        output_path.with_suffix(".vtt"),
                     )
                 elif format_name.lower() == "txt":
                     file_path = self._save_txt(
-                        transcript_segments, output_path.with_suffix(".txt"),
+                        transcript_segments,
+                        output_path.with_suffix(".txt"),
                     )
                 elif format_name.lower() == "json":
                     file_path = self._save_json(
-                        transcript_segments, output_path.with_suffix(".json"), metadata,
+                        transcript_segments,
+                        output_path.with_suffix(".json"),
+                        metadata,
                     )
                 elif format_name.lower() == "tsv":
                     file_path = self._save_tsv(
-                        transcript_segments, output_path.with_suffix(".tsv"),
+                        transcript_segments,
+                        output_path.with_suffix(".tsv"),
                     )
                 elif format_name.lower() == "lrc":
                     file_path = self._save_lrc(
-                        transcript_segments, output_path.with_suffix(".lrc"),
+                        transcript_segments,
+                        output_path.with_suffix(".lrc"),
                     )
                 else:
                     self.logger.warning("Unsupported format: %s", format_name)
@@ -123,7 +130,8 @@ class SubtitleManager:
         return saved_files
 
     def _convert_segments(
-        self, segments: list[dict[str, Any]],
+        self,
+        segments: list[dict[str, Any]],
     ) -> list[TranscriptSegment]:
         """Convert raw segments to internal TranscriptSegment format."""
         transcript_segments = []
@@ -157,7 +165,10 @@ class SubtitleManager:
             text = self._format_text_with_speaker(segment)
 
             subtitle = srt.Subtitle(
-                index=i, start=start_time, end=end_time, content=text,
+                index=i,
+                start=start_time,
+                end=end_time,
+                content=text,
             )
             srt_subtitles.append(subtitle)
 
@@ -169,7 +180,9 @@ class SubtitleManager:
         return output_path
 
     def _save_webvtt(
-        self, segments: list[TranscriptSegment], output_path: Path,
+        self,
+        segments: list[TranscriptSegment],
+        output_path: Path,
     ) -> Path:
         """Save transcript in WebVTT format."""
         vtt = webvtt.WebVTT()
@@ -312,7 +325,9 @@ class SubtitleManager:
         return output_path
 
     def _format_text_with_speaker(
-        self, segment: TranscriptSegment, prefix: str = "",
+        self,
+        segment: TranscriptSegment,
+        prefix: str = "",
     ) -> str:
         """Format text with optional speaker label."""
         if segment.speaker:
@@ -334,7 +349,8 @@ class SubtitleManager:
         return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
     def get_transcript_summary(
-        self, segments: list[dict[str, Any]],
+        self,
+        segments: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Generate a summary of the transcript.
 
@@ -371,7 +387,8 @@ class SubtitleManager:
                 }
 
             speaker_stats[speaker]["duration"] += segment.get("end", 0) - segment.get(
-                "start", 0,
+                "start",
+                0,
             )
             speaker_stats[speaker]["segments"] += 1
             speaker_stats[speaker]["words"] += len(segment.get("text", "").split())
@@ -392,7 +409,9 @@ class SubtitleManager:
         }
 
     def merge_short_segments(
-        self, segments: list[dict[str, Any]], min_duration: float = 1.0,
+        self,
+        segments: list[dict[str, Any]],
+        min_duration: float = 1.0,
     ) -> list[dict[str, Any]]:
         """Merge very short segments with adjacent segments to improve readability.
 
@@ -458,7 +477,9 @@ class SubtitleManager:
         return merged_segments
 
     def filter_low_confidence_segments(
-        self, segments: list[dict[str, Any]], min_confidence: float = -1.0,
+        self,
+        segments: list[dict[str, Any]],
+        min_confidence: float = -1.0,
     ) -> list[dict[str, Any]]:
         """Filter out segments with very low confidence scores.
 

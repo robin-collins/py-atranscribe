@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Console Output for Processing Status (2025-07-03)**
+  - Added console output for file queue status regardless of logging level configuration
+  - Added immediate console feedback when files are queued for processing with file size information
+  - Added console output for successful file completion with processing time, language, duration, and speaker count
+  - Added console output for failed file processing with error messages
+  - Enhanced user visibility into processing status even when logging is set to CRITICAL level
+  - All console outputs use `print()` with `flush=True` to bypass logger configuration
+
+### Fixed
+- **Cross-Device File Move Error (2025-07-03)**
+  - Fixed `OSError: [Errno 18] Invalid cross-device link` error in post-processing when moving files from NFS shares to local filesystems
+  - Replaced unsafe `Path.rename()` method with `FileHandler.safe_move_file()` which uses `shutil.move()` for cross-device compatibility
+  - Added `FileHandler` instance to `BatchTranscriber` class for robust file operations
+  - Improved error handling for file operations across different filesystem types
+- **Speaker Diarization Reliability Issues (2025-07-03)**
+  - Fixed `ValueError: not enough values to unpack (expected 3, got 2)` in `_calculate_confidence` method by adding `yield_label=True` parameter to `itertracks()` calls
+  - Fixed `AttributeError: 'NoneType' object has no attribute 'num_speakers'` in batch transcriber by adding proper None-checking for failed diarization results
+  - Enhanced error handling in diarization pipeline with graceful degradation when speaker detection fails
+  - Added defensive programming in confidence calculation with try-catch blocks to prevent processing interruption
+  - Improved diarization pipeline to retry without speaker constraints if initial processing fails
+  - Added comprehensive error handling in `_extract_speakers` and `_create_segments` methods
+  - Modified diarization method return type to `DiarizationResult | None` for better error handling
+  - Enhanced fallback handling to continue processing with default speaker labels when diarization fails
+
+- **cuDNN Library Version Mismatch Issues (2025-01-27)**
+  - Fixed cuDNN library loading errors: `Unable to load any of {libcudnn_cnn.so.9.1.0, libcudnn_cnn.so.9.1, libcudnn_cnn.so.9, libcudnn_cnn.so}`
+  - Added symbolic links in Dockerfile to map cuDNN 9.8.0 libraries to 9.1.x names expected by PyTorch 2.7.1+cu128
+  - Enhanced WhisperFactory with cuDNN-specific error handling and workarounds
+  - Modified fallback strategy to prioritize GPU configurations over CPU fallback for explicit CUDA users
+  - Added cuDNN environment variable optimization and debugging support
+  - Implemented GPU-first error recovery with cuDNN disabled mode before CPU fallback
+  - Respects user's explicit CUDA configuration (compute_type: "float32") and avoids unwanted CPU fallback
+  - Resolves `Invalid handle. Cannot load symbol cudnnCreateConvolutionDescriptor` runtime errors
+
+- **Missing Module Import Issues (2025-01-27)**
+  - Created missing `src/utils/file_handler.py` module based on Whisper-WebUI reference implementation
+  - Implemented comprehensive file handling utilities with media type detection, path operations, and file system operations
+  - Added support for 13 audio formats and 20 video formats with proper validation
+  - Included safe file operations (move, copy, delete) with conflict resolution and error handling
+  - Removed unused `OutputFormatter` import from `src/pipeline/batch_transcriber.py`
+  - Resolved `ModuleNotFoundError: No module named 'src.utils.file_handler'` startup error
+  - Fixed import chain issues preventing application startup in container environment
+
+### Added
 - **Comprehensive Startup Validation System (2025-01-27)**
   - Added `StartupChecker` class to `auto_diarize_transcribe.py` for comprehensive pre-startup validation
   - Implemented visual emoticon-based status reporting for easy Docker log identification (✅ ❌ ⚠️ 🚀 💥 🎉)

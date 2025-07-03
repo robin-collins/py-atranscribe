@@ -266,7 +266,10 @@ def classify_error(exception: Exception) -> ErrorInfo:
     elif isinstance(exception, ConnectionError | TimeoutError):
         category = ErrorCategory.NETWORK
         severity = ErrorSeverity.MEDIUM
-    elif isinstance(exception, TranscriptionMemoryError) or "memory" in str(exception).lower():
+    elif (
+        isinstance(exception, TranscriptionMemoryError)
+        or "memory" in str(exception).lower()
+    ):
         category = ErrorCategory.MEMORY
         severity = ErrorSeverity.HIGH
     elif "cuda" in str(exception).lower() or "gpu" in str(exception).lower():
@@ -300,8 +303,11 @@ def classify_error(exception: Exception) -> ErrorInfo:
     )
 
 
-def _create_sync_wrapper(config: RetryConfig, func: Callable[..., T]) -> Callable[..., T]:
+def _create_sync_wrapper(
+    config: RetryConfig, func: Callable[..., T]
+) -> Callable[..., T]:
     """Create synchronous retry wrapper."""
+
     @wraps(func)
     def sync_wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> T:
         last_exception = None
@@ -337,8 +343,11 @@ def _create_sync_wrapper(config: RetryConfig, func: Callable[..., T]) -> Callabl
     return sync_wrapper
 
 
-def _create_async_wrapper(config: RetryConfig, func: Callable[..., T]) -> Callable[..., T]:
+def _create_async_wrapper(
+    config: RetryConfig, func: Callable[..., T]
+) -> Callable[..., T]:
     """Create asynchronous retry wrapper."""
+
     @wraps(func)
     async def async_wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> T:
         last_exception = None
@@ -374,7 +383,9 @@ def _create_async_wrapper(config: RetryConfig, func: Callable[..., T]) -> Callab
     return async_wrapper
 
 
-def retry_on_error(config: RetryConfig | None = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
+def retry_on_error(
+    config: RetryConfig | None = None,
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Return a decorator that automatically retries on errors.
 
     Args:
@@ -422,7 +433,9 @@ class CircuitBreaker:
         self.state = "closed"  # closed, open, half-open
         self.logger = logging.getLogger(__name__)
 
-    def call(self, func: Callable[..., T], *args: tuple[Any, ...], **kwargs: dict[str, Any]) -> T:
+    def call(
+        self, func: Callable[..., T], *args: tuple[Any, ...], **kwargs: dict[str, Any]
+    ) -> T:
         """Call a function through the circuit breaker.
 
         Args:
@@ -469,7 +482,8 @@ class CircuitBreaker:
         if self.failure_count >= self.failure_threshold:
             self.state = "open"
             self.logger.warning(
-                "Circuit breaker opened after %d failures", self.failure_count,
+                "Circuit breaker opened after %d failures",
+                self.failure_count,
             )
 
 
@@ -510,7 +524,9 @@ class GracefulDegradation:
         fallback_model = fallbacks[fallback_index]
         if fallback_model != requested_model:
             self.logger.warning(
-                "Using fallback model %s instead of %s", fallback_model, requested_model,
+                "Using fallback model %s instead of %s",
+                fallback_model,
+                requested_model,
             )
 
         return fallback_model
@@ -537,7 +553,9 @@ class GracefulDegradation:
         fallback_type = fallbacks[fallback_index]
         if fallback_type != requested_type:
             self.logger.warning(
-                "Using fallback compute type %s instead of %s", fallback_type, requested_type,
+                "Using fallback compute type %s instead of %s",
+                fallback_type,
+                requested_type,
             )
 
         return fallback_type
@@ -563,7 +581,8 @@ class GracefulDegradation:
 
         if should_disable:
             self.logger.warning(
-                "Disabling feature '%s' due to resource constraints", feature,
+                "Disabling feature '%s' due to resource constraints",
+                feature,
             )
 
         return should_disable

@@ -3,6 +3,7 @@
 Uses watchdog for efficient file system monitoring with stability detection.
 
 """
+
 import asyncio
 import contextlib
 import logging
@@ -88,13 +89,16 @@ class FileStabilityTracker:
             # Check if file has changed
             if (
                 current_size != file_info.size
-                or abs(current_mtime - file_info.modified_time) > FILE_STABILITY_TIME_THRESHOLD
+                or abs(current_mtime - file_info.modified_time)
+                > FILE_STABILITY_TIME_THRESHOLD
             ):
                 # File has changed, reset stability tracking
                 file_info.size = current_size
                 file_info.modified_time = current_mtime
                 file_info.stable_since = None
-                self.logger.debug("File changed: %s (size: %s)", file_path, current_size)
+                self.logger.debug(
+                    "File changed: %s (size: %s)", file_path, current_size
+                )
                 return False
 
             # File hasn't changed, check stability
@@ -107,7 +111,9 @@ class FileStabilityTracker:
             stable_duration = current_time - file_info.stable_since
             if stable_duration >= self.stability_delay and not file_info.processed:
                 self.logger.info(
-                    "File stable and ready: %s (size: %s)", file_path, current_size,
+                    "File stable and ready: %s (size: %s)",
+                    file_path,
+                    current_size,
                 )
                 return True
             return False
@@ -260,7 +266,9 @@ class FileMonitor:
     """
 
     def __init__(
-        self, config: AppConfig, callback: Callable[[Path], None] | None = None,
+        self,
+        config: AppConfig,
+        callback: Callable[[Path], None] | None = None,
     ) -> None:
         """Initialize file monitor.
 
@@ -297,7 +305,8 @@ class FileMonitor:
                     self.callback(file_path)
                 except Exception:
                     self.logger.exception(
-                        "Error in processing callback for %s", file_path,
+                        "Error in processing callback for %s",
+                        file_path,
                     )
 
     async def start(self) -> None:
@@ -446,7 +455,8 @@ class ProcessingQueue:
                 return True
             except asyncio.QueueFull:
                 self.logger.warning(
-                    "Processing queue is full, dropping file: %s", file_path,
+                    "Processing queue is full, dropping file: %s",
+                    file_path,
                 )
                 return False
 

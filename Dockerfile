@@ -1,17 +1,10 @@
-# ---- Base image with CUDA runtime and cuDNN ----
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS base
+# Use official PyTorch image with CUDA 12.8 and compatible cuDNN
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.11 and essential dependencies
+# Install essential dependencies (PyTorch is already included in base image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3.11-dev \
-    python3-pip \
     build-essential \
     git \
     ffmpeg \
@@ -22,41 +15,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up Python 3.11 as default
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
-
-# ---- Torch layer: Only rebuilt when torch version changes ----
-FROM base AS torch
-
-WORKDIR /torch
-
-# Create a virtualenv to isolate the torch install
-RUN python3.11 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Install PyTorch with CUDA 12.8 support (matching the base image)
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-
-# Verify PyTorch CUDA installation
+# Verify PyTorch installation from base image
 RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'cuDNN version: {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else \"Not available\"}')"
 
-# ---- Builder: All other Python deps except torch* ----
-FROM torch AS builder
+# TEMPORARY: List all installed packages for debugging
+RUN echo "=== INSTALLED PACKAGES ===" && pip list && echo "=== END PACKAGES ==="
+
+# ---- Builder: Install additional Python dependencies ----
+FROM base AS builder
 
 WORKDIR /app
 
 COPY requirements.txt .
 
-# Remove torch/torchvision/torchaudio from requirements.txt to avoid duplication
-RUN grep -vE '^(torch|torchvision|torchaudio)' requirements.txt > requirements.notorch.txt || true
+# Install additional dependencies (PyTorch packages already in base image)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir torchmetrics
 
-RUN pip install --no-cache-dir -r requirements.notorch.txt \
-    && pip install --no-cache-dir torchmetrics
-
-# ---- Production: Minimal runtime with cuDNN ----
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS production
+# ---- Production: Use the same PyTorch base for consistency ----
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel AS production
 
 LABEL maintainer="Robin Collins <robin.f.collins@outlook.com>"
 LABEL org.opencontainers.image.source="https://github.com/robin-collins/py-atranscribe"
@@ -64,7 +42,6 @@ LABEL org.opencontainers.image.description="Automated Audio Transcription with S
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/opt/venv/bin:$PATH" \
     CONFIG_PATH=/app/config.yaml \
     INPUT_DIR=/data/in \
     OUTPUT_DIR=/data/out \
@@ -72,27 +49,23 @@ ENV PYTHONUNBUFFERED=1 \
     TEMP_DIR=/tmp/transcribe \
     LOG_LEVEL=INFO \
     CUDA_LAUNCH_BLOCKING=0 \
-    PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512 \
-    CUDA_MODULE_LOADING=LAZY
+    PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512,expandable_segments:True \
+    CUDA_MODULE_LOADING=LAZY \
+    CUDNN_LOGINFO_DBG=0 \
+    CUDNN_LOGERR_DBG=0 \
+    CUDNN_LOGWARN_DBG=0 \
+    CUDA_CACHE_PATH=/tmp/cuda_cache \
+    TORCH_CUDNN_V8_API_ENABLED=1
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.11 and runtime dependencies
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
     ffmpeg \
     libsndfile1 \
     curl \
     sudo \
     && rm -rf /var/lib/apt/lists/*
-
-# Set up Python 3.11 as default
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 
 # Create user
 RUN groupadd -r transcribe && useradd -r -g transcribe -m transcribe
@@ -101,9 +74,15 @@ RUN groupadd -r transcribe && useradd -r -g transcribe -m transcribe
 RUN echo "transcribe    ALL=(ALL)       NOPASSWD:       ALL" > /etc/sudoers.d/transcribe \
     && chmod 0440 /etc/sudoers.d/transcribe
 
-# Copy prebuilt venv with torch from the builder stage
-COPY --from=builder /opt/venv /opt/venv
-RUN chown -R transcribe:transcribe /opt/venv
+# Copy Python dependencies from builder stage
+COPY --from=builder /opt/conda /opt/conda
+
+# Fix cuDNN library path issue - create symlinks in standard location
+RUN mkdir -p /usr/local/cuda/lib64 && \
+    ln -sf /opt/conda/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn*.so* /usr/local/cuda/lib64/ && \
+    echo "/usr/local/cuda/lib64" >> /etc/ld.so.conf.d/cuda.conf && \
+    echo "/opt/conda/lib/python3.11/site-packages/nvidia/cudnn/lib" >> /etc/ld.so.conf.d/cuda.conf && \
+    ldconfig
 
 # App, data, and cache dirs
 RUN mkdir -p /app /data/in /data/out /data/backup /tmp/transcribe /home/transcribe/.cache && \

@@ -3,11 +3,6 @@ faster-whisper==1.1.1
 pyannote.audio==3.3.2
 transformers==4.47.1
 
-# PyTorch ecosystem for ML models - pinned for compatibility
-# torch==2.1.2
-# torchvision==0.16.2
-# torchaudio==2.1.2
-
 # Audio processing and format support
 ffmpeg-python>=0.2.0
 librosa>=0.10.0
@@ -16,10 +11,8 @@ pydub>=0.25.0
 
 # File monitoring and system utilities
 watchdog>=3.0.0
-psutil>=5.9.0
 
 # Configuration and data handling
-pyyaml>=6.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
@@ -37,7 +30,6 @@ silero-vad>=4.0.0
 
 # HTTP client for model downloads
 httpx>=0.24.0
-requests>=2.31.0
 
 # Development and testing
 pytest>=7.4.0

@@ -16,11 +16,11 @@ services:
 
     # Volume mounts
     volumes:
-      - /mnt/shared/raspi-audio-test:/data/in
-      - ./audio/output:/data/out
-      - ./audio/backup:/data/backup
+      - /mnt/shared/raspi-audio:/data/in
+      - /mnt/shared/raspi-audio/audio/output:/data/out
+      - /mnt/shared/raspi-audio/audio/backup:/data/backup
       - ./config.yaml:/app/config.yaml:ro  # Mount config as read-only
-      - ./logs/transcribe.log:/var/log/transcribe.log:rw
+      - /mnt/shared/raspi-audio/audio/logs/transcribe.log:/var/log/transcribe.log:rw
       - transcribe-cache:/home/transcribe/.cache
       - transcribe-models:/root/.cache  # For model caching
 
