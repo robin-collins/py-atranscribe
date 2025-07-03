@@ -318,7 +318,6 @@ class StartupChecker:
                 self.logger.warning(
                     "Check failed with warning: %s (%.3fs)", name, elapsed,
                 )
-            return False
         except Exception as e:
             elapsed = time.time() - start_time
             if critical:
@@ -327,12 +326,15 @@ class StartupChecker:
                 self.logger.exception(
                     "Critical check exception: %s - %s (%.3fs)", name, e, elapsed,
                 )
+                return False
             else:
                 print(f"⚠️  {name}: {e}")
                 self.warnings += 1
                 self.logger.warning(
                     "Check exception with warning: %s - %s (%.3fs)", name, e, elapsed,
                 )
+                return False
+        else:
             return False
 
     def check_python_version(self) -> bool:
@@ -450,10 +452,11 @@ class StartupChecker:
                 print(f"   cuDNN enabled: {cudnn_enabled}")
                 print(f"   cuDNN version: {cudnn_version}")
 
-            return True
         except (ImportError, RuntimeError, OSError) as e:
             print(f"   PyTorch test failed: {e}")
             return False
+        else:
+            return True
 
     def check_cuda_availability(self) -> bool:
         """Check CUDA availability and configuration with comprehensive diagnostics."""
@@ -519,9 +522,10 @@ class StartupChecker:
             print(
                 f"   cuDNN libraries: {'Found' if cudnn_libraries_found else 'Not Found'}",
             )
-            return False
         except (ImportError, RuntimeError, OSError) as e:
             print(f"   CUDA check failed: {e}")
+            return False
+        else:
             return False
 
     def _check_nvidia_smi(self) -> bool:
@@ -534,13 +538,14 @@ class StartupChecker:
                 text=True,
                 timeout=10,
             )
-            return result.returncode == 0
         except (
             subprocess.TimeoutExpired,
             subprocess.SubprocessError,
             FileNotFoundError,
         ):
             return False
+        else:
+            return result.returncode == 0
 
     def _check_cuda_compiler(self) -> bool:
         """Check if CUDA compiler (nvcc) is available."""
@@ -559,12 +564,13 @@ class StartupChecker:
                     (line for line in lines if "release" in line.lower()), "",
                 )
                 print(f"     CUDA compiler: {release_line}")
-                return True
-            print("     CUDA compiler: Not available")
-            return False
+            else:
+                print("     CUDA compiler: Not available")
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError, OSError):
             print("     CUDA compiler: Not available")
             return False
+        else:
+            return result.returncode == 0
 
     def _check_cudnn_libraries(self) -> bool:
         """Check if cuDNN library files are present in common locations."""
@@ -626,11 +632,11 @@ class StartupChecker:
             print(f"   CUDA diagnostics: {passed_checks}/{total_checks} checks passed")
 
             # Return True if at least PyTorch CUDA works (most important for our use case)
-            return pytorch_cuda_success
-
         except (ImportError, RuntimeError, OSError) as e:
             print(f"   CUDA diagnostics failed: {e}")
             return False
+        else:
+            return pytorch_cuda_success
 
     def _check_nvidia_smi_detailed(self) -> bool:
         """Check nvidia-smi with detailed output."""
@@ -647,12 +653,13 @@ class StartupChecker:
                 lines = result.stdout.strip().split("\n")
                 if lines:
                     print(f"     nvidia-smi: {lines[0]}")
-                return True
-            print("     nvidia-smi: Not available")
-            return False
+            else:
+                print("     nvidia-smi: Not available")
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError, OSError):
             print("     nvidia-smi: Not available")
             return False
+        else:
+            return result.returncode == 0
 
     def _check_cuda_compiler_detailed(self) -> bool:
         """Check CUDA compiler with version details."""
@@ -671,12 +678,13 @@ class StartupChecker:
                     (line for line in lines if "release" in line.lower()), "",
                 )
                 print(f"     CUDA compiler: {release_line}")
-                return True
-            print("     CUDA compiler: Not available")
-            return False
+            else:
+                print("     CUDA compiler: Not available")
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError, OSError):
             print("     CUDA compiler: Not available")
             return False
+        else:
+            return result.returncode == 0
 
     def _check_cudnn_files_detailed(self) -> bool:
         """Check cuDNN files with detailed locations."""
@@ -780,8 +788,6 @@ class StartupChecker:
                     bn_layer(bn_input)
                     print("     ✅ cuDNN batch normalization passed")
 
-                    return True
-
                 except (RuntimeError, torch.cuda.OutOfMemoryError, ImportError) as cudnn_error:
                     error_msg = str(cudnn_error).lower()
                     if "libcudnn" in error_msg or "cudnn" in error_msg:
@@ -792,6 +798,8 @@ class StartupChecker:
                         return False
                     print(f"     ❌ CUDA operations failed: {cudnn_error}")
                     return False
+                else:
+                    return True
 
             except (RuntimeError, torch.cuda.OutOfMemoryError, ImportError) as tensor_error:
                 print(f"     ❌ CUDA tensor operations failed: {tensor_error}")
@@ -811,10 +819,11 @@ class StartupChecker:
             sample_rate = 16000
             duration = 1.0
             torch.randn(1, int(sample_rate * duration))
-            return True
         except (ImportError, RuntimeError) as e:
             print(f"   Audio processing test failed: {e}")
             return False
+        else:
+            return True
 
     def check_whisper_models(self) -> bool:
         """Check Whisper model availability."""
@@ -822,10 +831,11 @@ class StartupChecker:
             from faster_whisper import WhisperModel
 
             # This doesn't actually load the model, just checks if we can import
-            return True
         except (ImportError, ModuleNotFoundError) as e:
             print(f"   Whisper model check failed: {e}")
             return False
+        else:
+            return True
 
     def check_diarization_models(self) -> bool:
         """Check diarization model availability."""
@@ -833,10 +843,11 @@ class StartupChecker:
             from pyannote.audio import Pipeline
 
             # Check if we can import the pipeline
-            return True
         except (ImportError, ModuleNotFoundError) as e:
             print(f"   Diarization model check failed: {e}")
             return False
+        else:
+            return True
 
     def check_huggingface_token(self) -> bool:
         """Check HuggingFace token for diarization."""
@@ -966,11 +977,11 @@ class StartupChecker:
                 print(f"   Config file does not exist: {config_file}")
                 return False
 
-            return True
-
         except (OSError, PermissionError) as e:
             print(f"   Config file check failed: {e}")
             return False
+        else:
+            return True
 
     def check_logging_file_permissions(self, config) -> bool:
         """Check logging file permissions if file logging is enabled."""
@@ -1039,11 +1050,11 @@ class StartupChecker:
                 )
                 # This is a warning, not a failure
 
-            return True
-
         except (OSError, PermissionError) as e:
             print(f"   Log file permissions check failed: {e}")
             return False
+        else:
+            return True
 
     def check_disk_space(self, config) -> bool:
         """Check available disk space."""
@@ -1069,10 +1080,11 @@ class StartupChecker:
             if low_space:
                 print(f"   Low disk space: {', '.join(low_space)}")
                 return False
-            return True
         except (ImportError, OSError) as e:
             print(f"   Disk space check failed: {e}")
             return False
+        else:
+            return True
 
     def check_memory_availability(self) -> bool:
         """Check system memory availability."""
@@ -1090,10 +1102,11 @@ class StartupChecker:
             if available_gb < 2.0:
                 print("   Warning: Low memory may cause processing issues")
                 return False
-            return True
         except (ImportError, OSError) as e:
             print(f"   Memory check failed: {e}")
             return False
+        else:
+            return True
 
     def check_container_mounts(self) -> bool:
         """Check if running in container and verify volume mounts."""
@@ -1157,11 +1170,11 @@ class StartupChecker:
                 )
 
             # This is informational, not a failure
-            return True
-
         except (OSError, PermissionError) as e:
             print(f"   Container mount check failed: {e}")
             return False
+        else:
+            return True
 
     def check_network_connectivity(self) -> bool:
         """Check network connectivity for model downloads."""
@@ -1169,10 +1182,11 @@ class StartupChecker:
             import socket
 
             socket.create_connection(("8.8.8.8", 53), timeout=3)
-            return True
         except (OSError, socket.timeout, ConnectionError):
             print("   No internet connectivity (model downloads may fail)")
             return False
+        else:
+            return True
 
     def run_all_checks(self, config, config_path: str | None = None) -> bool:
         """Run all startup checks."""
