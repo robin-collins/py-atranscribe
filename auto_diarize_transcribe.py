@@ -679,7 +679,31 @@ class StartupChecker:
                 z = torch.mm(x_large, y_large)
                 print("     ✅ CUDA matrix operations passed")
 
-                return True
+                # Test cuDNN-specific operations that might fail at runtime
+                try:
+                    # Test convolution operation that uses cuDNN
+                    conv_input = torch.randn(1, 3, 32, 32).cuda()
+                    conv_layer = torch.nn.Conv2d(3, 16, 3, padding=1).cuda()
+                    conv_output = conv_layer(conv_input)
+                    print("     ✅ cuDNN convolution operations passed")
+
+                    # Test batch normalization that uses cuDNN
+                    bn_input = torch.randn(1, 16, 32, 32).cuda()
+                    bn_layer = torch.nn.BatchNorm2d(16).cuda()
+                    bn_output = bn_layer(bn_input)
+                    print("     ✅ cuDNN batch normalization passed")
+
+                    return True
+
+                except Exception as cudnn_error:
+                    error_msg = str(cudnn_error).lower()
+                    if "libcudnn" in error_msg or "cudnn" in error_msg:
+                        print(f"     ⚠️  cuDNN runtime operations failed: {cudnn_error}")
+                        print("     ℹ️  Basic CUDA works but cuDNN has issues - will use CPU fallback")
+                        return False
+                    else:
+                        print(f"     ❌ CUDA operations failed: {cudnn_error}")
+                        return False
 
             except Exception as tensor_error:
                 print(f"     ❌ CUDA tensor operations failed: {tensor_error}")

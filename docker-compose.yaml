@@ -14,44 +14,15 @@ services:
     env_file:
       - .env
 
-    # Environment variables
-    # environment:
-    #   - CONFIG_PATH=/app/config.yaml
-    #   - LOG_LEVEL=INFO
-    #   - HF_TOKEN=hf_redacted
-
-    #   # Directory overrides
-    #   - INPUT_DIR=/data/in
-    #   - OUTPUT_DIR=/data/out
-    #   - BACKUP_DIR=/data/backup
-    #   - TEMP_DIR=/tmp/transcribe
-
-    #   # Transcription settings
-    #   - TRANSCRIPTION__WHISPER__MODEL_SIZE=${WHISPER_MODEL:-medium}
-    #   - TRANSCRIPTION__WHISPER__DEVICE=${DEVICE:-auto}
-    #   - TRANSCRIPTION__LANGUAGE=${LANGUAGE:-auto}
-
-    #   # Diarization settings
-    #   - DIARIZATION__ENABLED=${DIARIZATION_ENABLED:-true}
-    #   - DIARIZATION__MIN_SPEAKERS=${MIN_SPEAKERS:-1}
-    #   - DIARIZATION__MAX_SPEAKERS=${MAX_SPEAKERS:-10}
-
-    #   # Post-processing
-    #   - POST_PROCESSING__ACTION=${POST_PROCESSING_ACTION:-move}
-
-    #   # Performance settings
-    #   - PERFORMANCE__MAX_CONCURRENT_FILES=${MAX_CONCURRENT_FILES:-2}
-    #   - PERFORMANCE__MAX_MEMORY_USAGE_GB=${MAX_MEMORY_GB:-8.0}
-
     # Volume mounts
     volumes:
       - /mnt/shared/raspi-audio-test:/data/in
       - ./audio/output:/data/out
       - ./audio/backup:/data/backup
       - ./config.yaml:/app/config.yaml:ro  # Mount config as read-only
+      - ./logs/transcribe.log:/var/log/transcribe.log:rw
       - transcribe-cache:/home/transcribe/.cache
       - transcribe-models:/root/.cache  # For model caching
-      - ./logs/transcribe.log:/var/log/transcribe.log:rw
 
     # Port mapping for health checks
     ports:
@@ -89,51 +60,11 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Optional: Prometheus monitoring
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: py-atranscribe-prometheus
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-    profiles:
-      - monitoring
-
-  # Optional: Grafana dashboard
-  grafana:
-    image: grafana/grafana:latest
-    container_name: py-atranscribe-grafana
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-    profiles:
-      - monitoring
-
 # Named volumes
 volumes:
   transcribe-cache:
     driver: local
   transcribe-models:
-    driver: local
-  prometheus-data:
-    driver: local
-  grafana-data:
     driver: local
 
 # Networks

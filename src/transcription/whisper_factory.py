@@ -133,7 +133,7 @@ class WhisperFactory:
             # Apply graceful degradation to model size
             model_size = graceful_degradation.get_model_fallback(config.model_size)
 
-            # Determine device
+            # Determine device with enhanced error handling
             if config.device == "auto":
                 device = WhisperFactory.get_optimal_device()
             else:
@@ -154,190 +154,416 @@ class WhisperFactory:
             else:
                 self.logger.info("Creating new Whisper model: %s", cache_key)
 
-                # Create model with optimal settings
+                # Create model with comprehensive error handling
+                model = self._create_model_with_fallback(
+                    model_size, device, compute_type, config
+                )
+
+                if model:
+                    self._instances[cache_key] = model
+                    self.logger.info("Successfully created Whisper model: %s", cache_key)
+                else:
+                    raise ModelError("Failed to create Whisper model after all fallback attempts")
+
+            # Wrap in inference class with error handling
+            return FasterWhisperInference(model, config, self.logger)
+
+        except Exception as e:
+            self.logger.error("Failed to create Whisper inference: %s", e)
+            raise ModelError(f"Whisper inference creation failed: {e}") from e
+
+    def _create_model_with_fallback(
+        self, model_size: str, device: str, compute_type: str, config: WhisperConfig
+    ) -> WhisperModel | None:
+        """Create WhisperModel with comprehensive fallback handling.
+
+        Args:
+            model_size: Model size to load
+            device: Target device
+            compute_type: Compute type
+            config: Whisper configuration
+
+        Returns:
+            WhisperModel instance or None if all attempts fail
+        """
+        # Define fallback chain based on Whisper-WebUI patterns
+        fallback_attempts = [
+            (device, compute_type),  # Original request
+        ]
+
+        # Add fallbacks based on device type
+        if device == "cuda":
+            fallback_attempts.extend([
+                ("cuda", "float32"),  # Try float32 if float16 fails
+                ("cuda", "int8"),     # Try int8 for memory issues
+                ("cpu", "int8"),      # CPU fallback
+                ("cpu", "float32"),   # CPU with float32
+            ])
+        elif device == "cpu":
+            fallback_attempts.extend([
+                ("cpu", "float32"),   # Try float32 if int8 fails
+                ("cpu", "int16"),     # Try int16
+            ])
+        else:
+            # For other devices (mps, xpu), add CPU fallback
+            fallback_attempts.append(("cpu", "int8"))
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_attempts = []
+        for attempt in fallback_attempts:
+            if attempt not in seen:
+                seen.add(attempt)
+                unique_attempts.append(attempt)
+
+        # Try each fallback configuration
+        for attempt_device, attempt_compute_type in unique_attempts:
+            try:
+                self.logger.info(
+                    "Attempting to create model with device=%s, compute_type=%s",
+                    attempt_device, attempt_compute_type
+                )
+
                 model_kwargs = {
                     "model_size_or_path": model_size,
-                    "device": device,
-                    "compute_type": compute_type,
-                    "cpu_threads": config.cpu_threads
-                    if config.cpu_threads > 0
-                    else os.cpu_count(),
+                    "device": attempt_device,
+                    "compute_type": attempt_compute_type,
+                    "cpu_threads": config.cpu_threads if config.cpu_threads > 0 else os.cpu_count(),
                     "num_workers": config.num_workers,
                 }
 
                 # Add GPU-specific optimizations
-                if device == "cuda":
-                    model_kwargs.update(
-                        {
-                            "device_index": 0,  # Use first GPU
-                        },
+                if attempt_device == "cuda":
+                    model_kwargs.update({
+                        "device_index": 0,  # Use first GPU
+                    })
+
+                # Create the model
+                model = WhisperModel(**model_kwargs)
+
+                # Test the model with a simple operation to catch runtime cuDNN errors
+                self._test_model_runtime(model, attempt_device)
+
+                self.logger.info(
+                    "Successfully created and tested model with device=%s, compute_type=%s",
+                    attempt_device, attempt_compute_type
+                )
+
+                # Update graceful degradation if we had to fallback
+                if (attempt_device, attempt_compute_type) != (device, compute_type):
+                    graceful_degradation.increase_degradation()
+                    self.logger.warning(
+                        "Model creation required fallback from %s/%s to %s/%s",
+                        device, compute_type, attempt_device, attempt_compute_type
                     )
 
-                try:
-                    model = WhisperModel(**model_kwargs)
-                    self._instances[cache_key] = model
-                    self.logger.info("Successfully created Whisper model: %s", cache_key)
+                return model
 
-                except RuntimeError as e:
-                    # Try fallback options on failure
-                    if device == "cuda" and "out of memory" in str(e).lower():
-                        self.logger.warning("GPU out of memory, falling back to CPU")
-                        graceful_degradation.increase_degradation()
+            except Exception as e:
+                error_msg = str(e).lower()
 
-                        # Retry with CPU
-                        model_kwargs["device"] = "cpu"
-                        model_kwargs["compute_type"] = "int8"
-                        cache_key = f"{model_size}_cpu_int8"
+                # Log specific error types for debugging
+                if "libcudnn" in error_msg or "cudnn" in error_msg:
+                    self.logger.warning(
+                        "cuDNN library error with device=%s, compute_type=%s: %s",
+                        attempt_device, attempt_compute_type, e
+                    )
+                elif "out of memory" in error_msg:
+                    self.logger.warning(
+                        "GPU memory error with device=%s, compute_type=%s: %s",
+                        attempt_device, attempt_compute_type, e
+                    )
+                elif "cuda" in error_msg and "not available" in error_msg:
+                    self.logger.warning(
+                        "CUDA not available with device=%s, compute_type=%s: %s",
+                        attempt_device, attempt_compute_type, e
+                    )
+                else:
+                    self.logger.warning(
+                        "Model creation failed with device=%s, compute_type=%s: %s",
+                        attempt_device, attempt_compute_type, e
+                    )
 
-                        if cache_key not in self._instances:
-                            model = WhisperModel(**model_kwargs)
-                            self._instances[cache_key] = model
-                            self.logger.info(
-                                "Successfully created fallback model: %s", cache_key,
-                            )
-                        else:
-                            model = self._instances[cache_key]
-                    else:
-                        msg = f"Failed to create Whisper model: {e}"
-                        raise ModelError(msg, model_size) from e
+                # Continue to next fallback
+                continue
 
-            return FasterWhisperInference(model, config)
+        # All attempts failed
+        self.logger.error("All model creation attempts failed")
+        return None
+
+    def _test_model_runtime(self, model: WhisperModel, device: str) -> None:
+        """Test model with a simple operation to catch runtime errors.
+
+        Args:
+            model: WhisperModel to test
+            device: Device the model is running on
+
+        Raises:
+            RuntimeError: If model runtime test fails
+        """
+        try:
+            # Create a minimal test audio (1 second of silence at 16kHz)
+            import numpy as np
+            test_audio = np.zeros(16000, dtype=np.float32)
+
+            # Try to transcribe the test audio - this will trigger cuDNN operations
+            # Use minimal parameters to speed up the test
+            segments, _ = model.transcribe(
+                test_audio,
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                word_timestamps=False,
+                vad_filter=False,
+            )
+
+            # Consume the generator to actually trigger the operations
+            list(segments)
+
+            self.logger.debug("Model runtime test passed for device: %s", device)
 
         except Exception as e:
-            self.logger.exception("Error creating Whisper inference")
-            msg = f"Failed to create Whisper inference: {e}"
-            raise ModelError(msg) from e
+            error_msg = str(e).lower()
+            if "libcudnn" in error_msg or "cudnn" in error_msg:
+                raise RuntimeError(f"cuDNN runtime error: {e}") from e
+            elif "cuda" in error_msg:
+                raise RuntimeError(f"CUDA runtime error: {e}") from e
+            else:
+                raise RuntimeError(f"Model runtime test failed: {e}") from e
 
 
 class FasterWhisperInference:
-    """Wrapper class for faster-whisper model with optimized inference settings.
+    """Wrapper for WhisperModel with enhanced error handling and graceful degradation.
 
-    Provides transcription functionality with performance optimizations.
-
+    This class provides runtime error detection and automatic fallback mechanisms
+    for cuDNN and CUDA errors that may occur during transcription operations.
     """
 
-    def __init__(self, model: WhisperModel, config: WhisperConfig) -> None:
+    def __init__(self, model: WhisperModel, config: WhisperConfig, logger: logging.Logger) -> None:
         """Initialize FasterWhisperInference.
 
         Args:
             model: WhisperModel instance
             config: Whisper configuration
+            logger: Logger for logging messages
 
         """
         self.model = model
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
+        self._fallback_model = None
+        self._runtime_errors = 0
+        self._max_runtime_errors = 3  # Max errors before forcing CPU fallback
 
     @retry_on_error()
-    def transcribe(
-        self,
-        audio_path: str,
-        language: str | None = None,
-        initial_prompt: str | None = None,
-        **kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Transcribe audio file to text with timestamps.
+    def transcribe(self, audio_path: str, **kwargs) -> tuple:
+        """Transcribe audio with runtime error handling.
 
         Args:
             audio_path: Path to audio file
-            language: Language code (None for auto-detection)
-            initial_prompt: Initial prompt to guide transcription
             **kwargs: Additional transcription parameters
 
         Returns:
-            dict containing transcription results with segments and metadata
+            Tuple of (segments, transcription_info)
 
         Raises:
-            AudioProcessingError: If transcription fails
-
+            AudioProcessingError: If transcription fails after all fallback attempts
         """
         try:
-            self.logger.info("Starting transcription: %s", audio_path)
+            # Try with primary model first
+            return self._transcribe_with_model(self.model, audio_path, **kwargs)
 
-            # Set default transcription parameters
-            transcribe_params = {
-                "language": language,
-                "initial_prompt": initial_prompt,
-                "beam_size": 5,  # Good balance of quality and speed
-                "best_of": 5,  # Number of candidates for beam search
-                "temperature": 0.0,  # Deterministic output
-                "condition_on_previous_text": True,  # Use context from previous segments
-                "compression_ratio_threshold": 2.4,  # Filter out segments with low compression
-                "log_prob_threshold": -1.0,  # Filter out segments with low probability
-                "no_speech_threshold": 0.6,  # Filter out segments without speech
-                "word_timestamps": True,  # Enable word-level timestamps
-                "prepend_punctuations": '"\'([{-',
-                "append_punctuations": '"\'.,:)]}',
-            }
+        except RuntimeError as e:
+            error_msg = str(e).lower()
 
-            # Override with any provided parameters
-            transcribe_params.update(kwargs)
+            # Handle cuDNN runtime errors
+            if "libcudnn" in error_msg or "cudnn" in error_msg:
+                self.logger.warning("cuDNN runtime error during transcription: %s", e)
+                return self._handle_cudnn_runtime_error(audio_path, **kwargs)
 
+            # Handle CUDA runtime errors
+            elif "cuda" in error_msg:
+                self.logger.warning("CUDA runtime error during transcription: %s", e)
+                return self._handle_cuda_runtime_error(audio_path, **kwargs)
+
+            # Handle memory errors
+            elif "out of memory" in error_msg:
+                self.logger.warning("GPU memory error during transcription: %s", e)
+                return self._handle_memory_error(audio_path, **kwargs)
+
+            else:
+                # Re-raise other runtime errors
+                raise AudioProcessingError(f"Transcription runtime error: {e}") from e
+
+        except Exception as e:
+            self.logger.error("Unexpected error during transcription: %s", e)
+            raise AudioProcessingError(f"Transcription failed: {e}") from e
+
+    def _transcribe_with_model(self, model: WhisperModel, audio_path: str, **kwargs) -> tuple:
+        """Perform transcription with a specific model.
+
+        Args:
+            model: WhisperModel to use
+            audio_path: Path to audio file
+            **kwargs: Transcription parameters
+
+        Returns:
+            Tuple of (segments, transcription_info)
+        """
+        try:
             # Perform transcription
-            segments, info = self.model.transcribe(audio_path, **transcribe_params)
+            segments, info = model.transcribe(audio_path, **kwargs)
 
-            # Convert segments generator to list and extract information
-            segments_list = []
-            total_duration = 0.0
+            # Convert segments to list to trigger any lazy evaluation errors
+            segments_list = list(segments)
 
-            for segment in segments:
-                segment_dict = {
-                    "id": segment.id,
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text.strip(),
-                    "words": [],
-                    "avg_logprob": segment.avg_logprob,
-                    "no_speech_prob": segment.no_speech_prob,
-                    "compression_ratio": segment.compression_ratio,
-                }
-
-                # Add word-level information if available
-                if hasattr(segment, "words") and segment.words:
-                    for word in segment.words:
-                        word_dict = {
-                            "start": word.start,
-                            "end": word.end,
-                            "word": word.word,
-                            "probability": word.probability,
-                        }
-                        segment_dict["words"].append(word_dict)
-
-                segments_list.append(segment_dict)
-                total_duration = max(total_duration, segment.end)
-
-            # Prepare result dictionary
-            result = {
-                "segments": segments_list,
+            # Create transcription info
+            transcription_info = {
                 "language": info.language,
                 "language_probability": info.language_probability,
                 "duration": info.duration,
-                "duration_after_vad": getattr(
-                    info, "duration_after_vad", info.duration,
-                ),
-                "transcription_info": {
-                    "model_size": self.config.model_size,
-                    "compute_type": transcribe_params.get("compute_type", "auto"),
-                    "device": self.model.device,
-                    "beam_size": transcribe_params["beam_size"],
-                    "temperature": transcribe_params["temperature"],
-                },
-                "text": " ".join(segment["text"] for segment in segments_list),
+                "all_language_probs": info.all_language_probs,
             }
 
-            self.logger.info(
-                "Transcription completed: %d segments, %.2fs duration, language: %s",
-                len(segments_list),
-                total_duration,
-                info.language,
-            )
+            return segments_list, transcription_info
 
-            return result
+        except Exception as e:
+            # Log the specific error for debugging
+            self.logger.debug("Transcription error with model: %s", e)
+            raise
 
-        except AudioProcessingError as e:
-            self.logger.exception("Transcription failed for %s", audio_path)
-            msg = f"Transcription failed: {e}"
-            raise AudioProcessingError(msg, audio_path) from e
+    def _handle_cudnn_runtime_error(self, audio_path: str, **kwargs) -> tuple:
+        """Handle cuDNN runtime errors with CPU fallback.
+
+        Args:
+            audio_path: Path to audio file
+            **kwargs: Transcription parameters
+
+        Returns:
+            Tuple of (segments, transcription_info)
+        """
+        self._runtime_errors += 1
+
+        if self._runtime_errors >= self._max_runtime_errors:
+            self.logger.warning("Too many cuDNN runtime errors, forcing permanent CPU fallback")
+            graceful_degradation.increase_degradation()
+
+        # Create CPU fallback model if needed
+        if not self._fallback_model:
+            self.logger.info("Creating CPU fallback model for cuDNN runtime errors")
+            self._fallback_model = self._create_cpu_fallback_model()
+
+        if self._fallback_model:
+            self.logger.info("Using CPU fallback model due to cuDNN runtime error")
+            return self._transcribe_with_model(self._fallback_model, audio_path, **kwargs)
+        else:
+            raise AudioProcessingError("Failed to create CPU fallback model for cuDNN error")
+
+    def _handle_cuda_runtime_error(self, audio_path: str, **kwargs) -> tuple:
+        """Handle CUDA runtime errors with CPU fallback.
+
+        Args:
+            audio_path: Path to audio file
+            **kwargs: Transcription parameters
+
+        Returns:
+            Tuple of (segments, transcription_info)
+        """
+        self._runtime_errors += 1
+
+        # Create CPU fallback model if needed
+        if not self._fallback_model:
+            self.logger.info("Creating CPU fallback model for CUDA runtime errors")
+            self._fallback_model = self._create_cpu_fallback_model()
+
+        if self._fallback_model:
+            self.logger.info("Using CPU fallback model due to CUDA runtime error")
+            return self._transcribe_with_model(self._fallback_model, audio_path, **kwargs)
+        else:
+            raise AudioProcessingError("Failed to create CPU fallback model for CUDA error")
+
+    def _handle_memory_error(self, audio_path: str, **kwargs) -> tuple:
+        """Handle GPU memory errors with CPU fallback.
+
+        Args:
+            audio_path: Path to audio file
+            **kwargs: Transcription parameters
+
+        Returns:
+            Tuple of (segments, transcription_info)
+        """
+        self._runtime_errors += 1
+
+        # Try to free GPU memory
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                self.logger.info("Cleared GPU memory cache")
+        except Exception:
+            pass
+
+        # Create CPU fallback model if needed
+        if not self._fallback_model:
+            self.logger.info("Creating CPU fallback model for memory errors")
+            self._fallback_model = self._create_cpu_fallback_model()
+
+        if self._fallback_model:
+            self.logger.info("Using CPU fallback model due to GPU memory error")
+            return self._transcribe_with_model(self._fallback_model, audio_path, **kwargs)
+        else:
+            raise AudioProcessingError("Failed to create CPU fallback model for memory error")
+
+    def _create_cpu_fallback_model(self) -> WhisperModel | None:
+        """Create a CPU fallback model.
+
+        Returns:
+            WhisperModel instance or None if creation fails
+        """
+        try:
+            # Use the same model size but force CPU
+            model_size = graceful_degradation.get_model_fallback(self.config.model_size)
+
+            model_kwargs = {
+                "model_size_or_path": model_size,
+                "device": "cpu",
+                "compute_type": "int8",  # Use int8 for better CPU performance
+                "cpu_threads": self.config.cpu_threads if self.config.cpu_threads > 0 else os.cpu_count(),
+                "num_workers": self.config.num_workers,
+            }
+
+            fallback_model = WhisperModel(**model_kwargs)
+            self.logger.info("Successfully created CPU fallback model")
+            return fallback_model
+
+        except Exception as e:
+            self.logger.error("Failed to create CPU fallback model: %s", e)
+            return None
+
+    def cleanup(self) -> None:
+        """Clean up model resources."""
+        try:
+            if self._fallback_model:
+                del self._fallback_model
+                self._fallback_model = None
+
+            if self.model:
+                del self.model
+                self.model = None
+
+            # Clear GPU memory if available
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            self.logger.debug("Cleaned up WhisperModel resources")
+
+        except Exception as e:
+            self.logger.warning("Error during model cleanup: %s", e)
 
     def detect_language(self, audio_path: str) -> dict[str, Any]:
         """Detect the language of an audio file.

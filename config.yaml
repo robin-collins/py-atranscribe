@@ -70,15 +70,6 @@ transcription:
   # Language detection
   language: "en"              # auto or specific language code (en, es, fr, etc.)
 
-  # Output options
-  # output_formats:
-  #   - "srt"                     # SubRip subtitle format
-  #   - "webvtt"                  # WebVTT subtitle format
-  #   - "txt"                     # Plain text transcript
-  #   - "json"                    # JSON with detailed timestamps
-  #   - "tsv"                     # Tab-separated values
-  #   - "lrc"                     # LRC lyric format
-
   output_formats:
     - "srt"                     # SubRip subtitle format
     - "txt"                     # Plain text transcript
@@ -92,7 +83,7 @@ diarization:
 
   # Diarization model settings
   model: "pyannote/speaker-diarization-3.1"
-  device: "auto"                # auto, cpu, cuda
+  device: "cuda"                # auto, cpu, cuda
 
   # Speaker parameters
   min_speakers: 1
@@ -144,5 +135,12 @@ health_check:
   memory_usage_max_percent: 90.0
   queue_size_max: 100
 
-# Prometheus monitoring is configured via Docker Compose
-# and doesn't need to be in the main application config
+# Prometheus metrics configuration
+metrics:
+  enabled: false               # Enable Prometheus metrics endpoint
+  port: 9090                   # Metrics endpoint port
+  system_metrics_interval: 30  # System metrics collection interval (seconds)
+  processing_metrics_interval: 10  # Processing metrics collection interval (seconds)
+
+# Note: Full Prometheus monitoring stack (Prometheus + Grafana) is configured
+# via Docker Compose and doesn't need to be in the main application config

@@ -290,8 +290,8 @@ class HealthCheckConfig(BaseModel):
     )
 
 
-class MonitoringConfig(BaseModel):
-    """Monitoring and metrics configuration."""
+class MetricsConfig(BaseModel):
+    """Prometheus metrics configuration."""
 
     enabled: bool = Field(default=False, description="Enable Prometheus metrics")
     port: int = Field(default=9090, ge=1, le=65535, description="Metrics port")
@@ -323,6 +323,7 @@ class AppConfig(BaseSettings):
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     health_check: HealthCheckConfig = Field(default_factory=HealthCheckConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
 
 
 def expand_environment_variables(value: str | dict | list) -> str | dict | list:

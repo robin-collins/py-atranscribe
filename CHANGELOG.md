@@ -238,3 +238,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Categorized issues by type: deprecated imports, exception handling, code simplification, etc.
   - Provided action plan with priority levels for systematic code quality improvement
   - No automatic fixes applied - all issues require manual intervention or review
+
+### Added - Comprehensive cuDNN Runtime Error Handling
+- **Enhanced WhisperFactory with cuDNN Error Detection**: Implemented comprehensive cuDNN library loading error detection and automatic fallback mechanisms based on Whisper-WebUI reference patterns
+- **Runtime Error Testing**: Added model runtime testing with minimal audio samples to catch cuDNN errors that occur during actual transcription operations
+- **Multi-Level Fallback Chain**: Implemented systematic fallback from CUDA→CPU with different compute types (float16→float32→int8) when cuDNN issues are detected
+- **FasterWhisperInference Wrapper**: Created enhanced wrapper class that provides runtime error handling during transcription operations with automatic CPU fallback
+- **Persistent Error Tracking**: Added runtime error counting and automatic permanent CPU fallback after repeated cuDNN failures
+- **Memory Management**: Enhanced GPU memory cleanup and cache clearing when switching between devices due to errors
+- **Error-Specific Logging**: Added detailed error categorization and logging for cuDNN, CUDA, and memory-related issues
+- **Graceful Degradation Integration**: Connected cuDNN error handling to the existing graceful degradation system for consistent behavior
+
+### Fixed - Configuration Duplicate Key Issue
+- **Resolved Duplicate Monitoring Keys**: Fixed YAML configuration conflict where both file monitoring and Prometheus metrics were using the same `monitoring` key
+- **Renamed Metrics Configuration**: Changed `MonitoringConfig` class to `MetricsConfig` and updated YAML key from `monitoring` to `metrics` for Prometheus configuration
+- **Clear Separation of Concerns**: File monitoring settings remain under `monitoring:` while Prometheus metrics settings are now under `metrics:`
+- **Updated Test Imports**: Fixed test file imports to use the renamed `MetricsConfig` class
+- **Configuration Validation**: Ensured proper separation prevents YAML parsing conflicts and configuration overwrites
+
+### Technical Implementation
+- **Device Detection Enhancement**: Improved device selection logic based on Whisper-WebUI patterns with XPU, MPS, and CUDA detection
+- **Model Creation Fallback**: Systematic model creation attempts with different device/compute type combinations
+- **Runtime Validation**: Test each created model with minimal transcription to catch runtime cuDNN errors before actual use
+- **CPU Fallback Models**: Automatic creation of CPU-based fallback models when GPU operations fail
+- **Resource Cleanup**: Enhanced cleanup procedures for both primary and fallback models with proper GPU memory management
+
+### Error Handling Improvements
+- **cuDNN Library Loading**: Specific detection and handling of `libcudnn_cnn.so` loading failures and `cudnnCreateConvolutionDescriptor` errors
+- **CUDA Runtime Errors**: Enhanced handling of CUDA device availability and operation failures
+- **Memory Errors**: Improved GPU out-of-memory error detection and automatic CPU fallback
+- **Transcription Pipeline**: Updated batch transcriber to handle new tuple return format and provide better error reporting
+
+### Based on Reference Implementation
+- **Whisper-WebUI Patterns**: Analyzed and implemented device handling patterns from the reference Whisper-WebUI repository
+- **Factory Design**: Enhanced factory pattern with comprehensive error handling and model caching
+- **Fallback Strategies**: Implemented systematic fallback strategies based on proven patterns from the reference implementation
+
+## [1.0.0] - 2025-07-03
+
+### Added - Enhanced Logging and Diagnostics

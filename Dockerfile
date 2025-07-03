@@ -112,6 +112,10 @@ RUN mkdir -p /app /data/in /data/out /data/backup /tmp/transcribe /home/transcri
 WORKDIR /app
 COPY --chown=transcribe:transcribe . .
 
+# Add entrypoint script (as root, before USER transcribe)
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 USER transcribe
 
 EXPOSE 8000
@@ -121,4 +125,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 VOLUME ["/data/in", "/data/out", "/data/backup"]
 
-ENTRYPOINT ["python", "auto_diarize_transcribe.py"]
+ENTRYPOINT ["/entrypoint.sh", "python", "auto_diarize_transcribe.py"]

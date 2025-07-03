@@ -23,6 +23,8 @@ from src.utils.error_handling import (
     graceful_degradation,
     retry_on_error,
 )
+from src.utils.file_handler import FileHandler
+from src.utils.output_formatter import OutputFormatter
 
 
 @dataclass
@@ -273,17 +275,88 @@ class BatchTranscriber:
             if language == "auto":
                 language = None
 
+            # Prepare transcription parameters
+            transcribe_params = {
+                "language": language,
+                "initial_prompt": self.config.transcription.whisper.initial_prompt,
+                "beam_size": 5,  # Good balance of quality and speed
+                "best_of": 5,  # Number of candidates for beam search
+                "temperature": 0.0,  # Deterministic output
+                "condition_on_previous_text": True,  # Use context from previous segments
+                "compression_ratio_threshold": 2.4,  # Filter out segments with low compression
+                "log_prob_threshold": -1.0,  # Filter out segments with low probability
+                "no_speech_threshold": 0.6,  # Filter out segments without speech
+                "word_timestamps": True,  # Enable word-level timestamps
+                "prepend_punctuations": '"\'([{-',
+                "append_punctuations": '"\'.,:)]}',
+            }
+
             # Run transcription in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                None, self._whisper_inference.transcribe, str(file_path), language,
+            segments_list, transcription_info = await loop.run_in_executor(
+                None, self._whisper_inference.transcribe, str(file_path), **transcribe_params
             )
 
+            # Convert segments to the expected format
+            processed_segments = []
+            total_duration = 0.0
+
+            for segment in segments_list:
+                segment_dict = {
+                    "id": getattr(segment, 'id', len(processed_segments)),
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text.strip(),
+                    "words": [],
+                    "avg_logprob": getattr(segment, 'avg_logprob', 0.0),
+                    "no_speech_prob": getattr(segment, 'no_speech_prob', 0.0),
+                    "compression_ratio": getattr(segment, 'compression_ratio', 0.0),
+                }
+
+                # Add word-level information if available
+                if hasattr(segment, "words") and segment.words:
+                    for word in segment.words:
+                        word_dict = {
+                            "start": word.start,
+                            "end": word.end,
+                            "word": word.word,
+                            "probability": getattr(word, 'probability', 1.0),
+                        }
+                        segment_dict["words"].append(word_dict)
+
+                processed_segments.append(segment_dict)
+                total_duration = max(total_duration, segment.end)
+
+            # Prepare result dictionary in the expected format
+            result = {
+                "segments": processed_segments,
+                "language": transcription_info.get("language"),
+                "language_probability": transcription_info.get("language_probability", 1.0),
+                "duration": transcription_info.get("duration", total_duration),
+                "duration_after_vad": transcription_info.get("duration", total_duration),
+                "transcription_info": {
+                    "model_size": self.config.transcription.whisper.model_size,
+                    "compute_type": self.config.transcription.whisper.compute_type,
+                    "device": self.config.transcription.whisper.device,
+                    "beam_size": transcribe_params["beam_size"],
+                    "temperature": transcribe_params["temperature"],
+                },
+                "text": " ".join(segment["text"] for segment in processed_segments),
+            }
+
+            self.logger.info(
+                "Transcription completed: %d segments, %.2fs duration, language: %s",
+                len(processed_segments),
+                total_duration,
+                transcription_info.get("language", "unknown"),
+            )
+
+            return result
 
         except Exception as e:
             self.logger.exception("Transcription failed for %s", file_path)
-            msg = f"Transcription failed: {e}"
-            raise AudioProcessingError(msg, str(file_path)) from e
+            # Re-raise as AudioProcessingError to be handled by the error handling system
+            raise AudioProcessingError(f"Transcription failed for {file_path}: {e}") from e
 
     async def _perform_diarization(self, file_path: Path) -> DiarizationResult | None:
         """Perform speaker diarization."""
@@ -471,16 +544,28 @@ class BatchTranscriber:
         self.logger.info("Processing statistics reset")
 
     async def cleanup(self) -> None:
-        """Clean up resources."""
+        """Clean up resources used by the transcriber."""
         try:
-            # Clear model caches to free memory
-            WhisperFactory.clear_cache()
-            Diarizer.clear_cache()
+            self.logger.info("Cleaning up BatchTranscriber resources...")
 
-            self.logger.info("Batch transcriber cleanup completed")
+            # Clean up whisper inference
+            if self._whisper_inference:
+                if hasattr(self._whisper_inference, 'cleanup'):
+                    self._whisper_inference.cleanup()
+                self._whisper_inference = None
+
+            # Clean up diarizer
+            if self.diarizer:
+                await self.diarizer.cleanup()
+
+            # Clean up factory cache
+            if self.whisper_factory:
+                self.whisper_factory.clear_cache()
+
+            self.logger.info("BatchTranscriber cleanup completed")
 
         except Exception:
-            self.logger.exception("Error during cleanup")
+            self.logger.exception("Error during BatchTranscriber cleanup")
 
     def __del__(self) -> None:
         """Destructor to ensure cleanup."""
