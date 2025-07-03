@@ -20,6 +20,7 @@ import logging
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -29,7 +30,6 @@ from pathlib import Path
 from typing import Optional
 
 import psutil
-import socket
 import structlog
 import yaml
 
@@ -67,6 +67,23 @@ from src.monitoring.file_monitor import FileMonitor, ProcessingQueue
 from src.monitoring.health_check import HealthChecker
 from src.pipeline.batch_transcriber import BatchTranscriber, ProcessingProgress
 from src.utils.error_handling import error_tracker, graceful_degradation
+
+# System monitoring thresholds
+CPU_USAGE_ALERT_THRESHOLD = 90  # Percentage
+MEMORY_USAGE_ALERT_THRESHOLD = 85  # Percentage
+GPU_MEMORY_ALERT_THRESHOLD = 90  # Percentage
+PROCESS_MEMORY_ALERT_THRESHOLD = 50  # Percentage
+ERROR_RATE_ALERT_THRESHOLD = 5  # Errors per minute
+
+# System requirements
+REQUIRED_PYTHON_MAJOR_VERSION = 3
+REQUIRED_PYTHON_MINOR_VERSION = 10
+
+# Display limits
+CUDNN_LIBS_DISPLAY_LIMIT = 3  # Number of cuDNN libraries to show before truncating
+
+# Resource requirements
+MINIMUM_MEMORY_GB = 2.0  # Minimum available memory in GB
 
 
 class SystemMonitor:
@@ -133,9 +150,9 @@ class SystemMonitor:
             )
 
             # Alert on high resource usage
-            if cpu_percent > 90:
+            if cpu_percent > CPU_USAGE_ALERT_THRESHOLD:
                 await self._alert("high_cpu", f"High CPU usage: {cpu_percent:.1f}%")
-            if memory.percent > 85:
+            if memory.percent > MEMORY_USAGE_ALERT_THRESHOLD:
                 await self._alert(
                     "high_memory", f"High memory usage: {memory.percent:.1f}%",
                 )
@@ -168,7 +185,7 @@ class SystemMonitor:
                         usage_percent,
                     )
 
-                    if usage_percent > 90:
+                    if usage_percent > GPU_MEMORY_ALERT_THRESHOLD:
                         await self._alert(
                             "gpu_memory",
                             f"GPU {device_id} memory high: {usage_percent:.1f}%",
@@ -223,8 +240,8 @@ class SystemMonitor:
                 memory_percent,
             )
 
-            # Alert if process is using more than 50% of system memory
-            if memory_percent > 50:
+            # Alert if process is using more than threshold% of system memory
+            if memory_percent > PROCESS_MEMORY_ALERT_THRESHOLD:
                 await self._alert(
                     "process_memory",
                     f"Process memory usage high: {memory_percent:.1f}%",
@@ -248,7 +265,7 @@ class SystemMonitor:
                 )
 
             # Alert on high error rates
-            if error_stats.get("error_rate", 0) > 5:  # More than 5 errors per minute
+            if error_stats.get("error_rate", 0) > ERROR_RATE_ALERT_THRESHOLD:
                 await self._alert(
                     "high_error_rate",
                     f"High error rate: {error_stats['error_rate']:.1f}/min",
@@ -356,20 +373,19 @@ class StartupChecker:
                     "Critical check exception: %s - %s (%.3fs)", name, e, elapsed,
                 )
                 return False
-            else:
-                print(f"⚠️  {name}: {e}")
-                self.warnings += 1
-                self.logger.warning(
-                    "Check exception with warning: %s - %s (%.3fs)", name, e, elapsed,
-                )
-                return False
+            print(f"⚠️  {name}: {e}")
+            self.warnings += 1
+            self.logger.warning(
+                "Check exception with warning: %s - %s (%.3fs)", name, e, elapsed,
+            )
+            return False
         else:
             return False
 
     def check_python_version(self) -> bool:
         """Check Python version compatibility."""
         version = sys.version_info
-        if version.major == 3 and version.minor >= 10:
+        if version.major == REQUIRED_PYTHON_MAJOR_VERSION and version.minor >= REQUIRED_PYTHON_MINOR_VERSION:
             return True
         print(f"   Required: Python 3.10+, Found: {version.major}.{version.minor}")
         return False
@@ -743,10 +759,10 @@ class StartupChecker:
                     if libs:
                         print(f"     cuDNN libraries in {path}: {len(libs)} files")
                         # Show first few libraries
-                        for lib in libs[:3]:
+                        for lib in libs[:CUDNN_LIBS_DISPLAY_LIMIT]:
                             print(f"       {os.path.basename(lib)}")
-                        if len(libs) > 3:
-                            print(f"       ... and {len(libs) - 3} more")
+                        if len(libs) > CUDNN_LIBS_DISPLAY_LIMIT:
+                            print(f"       ... and {len(libs) - CUDNN_LIBS_DISPLAY_LIMIT} more")
                         found_cudnn = True
                         break
             except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError, OSError):
@@ -1124,7 +1140,7 @@ class StartupChecker:
                 f"   Memory: {available_gb:.1f}GB available / {memory_gb:.1f}GB total",
             )
 
-            if available_gb < 2.0:
+            if available_gb < MINIMUM_MEMORY_GB:
                 print("   Warning: Low memory may cause processing issues")
                 return False
         except OSError as e:
@@ -1205,7 +1221,7 @@ class StartupChecker:
         """Check network connectivity for model downloads."""
         try:
             socket.create_connection(("8.8.8.8", 53), timeout=3)
-        except (OSError, socket.timeout, ConnectionError):
+        except (TimeoutError, OSError, ConnectionError):
             print("   No internet connectivity (model downloads may fail)")
             return False
         else:
