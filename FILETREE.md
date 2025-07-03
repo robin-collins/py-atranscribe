@@ -30,21 +30,42 @@
 │  ├── test_config.py
 │  ├── test_error_handling.py
 │  └── test_subtitle_manager.py
+├── scripts/
+│  └── bss-pyatranscribe.sh
+├── audio/
+│  ├── backup/
+│  │  └── 2025-07-03/
+│  │      ├── audio_20250703_030630_22kHz.flac
+│  │      ├── audio_20250703_031133_22kHz.flac
+│  │      └── audio_20250703_031635_22kHz.flac
+│  └── output/
+│      ├── audio_20250703_030630_22kHz.srt
+│      ├── audio_20250703_030630_22kHz.tsv
+│      ├── audio_20250703_030630_22kHz.txt
+│      ├── audio_20250703_031133_22kHz.srt
+│      ├── audio_20250703_031133_22kHz.tsv
+│      ├── audio_20250703_031133_22kHz.txt
+│      ├── audio_20250703_031635_22kHz.srt
+│      ├── audio_20250703_031635_22kHz.tsv
+│      └── audio_20250703_031635_22kHz.txt
+├── logs/
+│  └── transcribe.log
+├── reference/
+│  ├── Whisper-WebUI-concise/
+│  │  └── [reference implementation files]
+│  └── [documentation and analysis files]
 ├── auto_diarize_transcribe.py
 ├── CHANGELOG.md
 ├── CLAUDE.md
 ├── config.yaml
 ├── docker-compose.yaml
 ├── Dockerfile
+├── entrypoint.sh
+├── FAIILURELOG.md
 ├── FILETREE.md
-├── linting-errors.md
-├── main.py
-├── py-atranscribe.md
 ├── pyproject.toml
 ├── README.md
-├── requirements.txt
-├── transcribe_diarize.md
-└── uv.lock
+└── requirements.txt
 
 ```
 
@@ -58,25 +79,26 @@ py-atranscribe/
 ├── README.md                          # Project documentation and setup instructions
 ├── CHANGELOG.md                       # Version history and release notes
 ├── FILETREE.md                        # This file - project structure documentation
-├── linting-errors.md                  # Comprehensive Ruff linting analysis report
+├── FAIILURELOG.md                     # Documentation of failed attempts and debugging notes
 ├── CLAUDE.md                          # Instructions for Claude Code assistant
-├── py-atranscribe.md                  # Software Design Document (SDD)
-├── transcribe_diarize.md             # Additional technical documentation
 ├── requirements.txt                   # Python package dependencies
 ├── config.yaml                        # Application configuration template
-├── .env.example                       # Environment variables template
 ├── Dockerfile                         # Docker container configuration
 ├── docker-compose.yaml               # Docker compose with monitoring stack
-├── pyproject.toml                     # Python project configuration and Ruff linting
-├── .gitignore                         # Git ignore patterns
+├── entrypoint.sh                      # Docker container entrypoint script
+├── pyproject.toml                     # Python project configuration and dependencies
 ├── auto_diarize_transcribe.py         # Main application entry point with enhanced diagnostics
-│   ├── __init__.py
-│   └── diarizer.py                    # Speaker diarization using pyannote.audio
-├── .cursorignore                      # Cursor editor ignore patterns
-├── .cursorindexingignore             # Cursor indexing ignore patterns
-├── .dockerignore                      # Docker ignore patterns
-├── .python-version                    # Python version specification
-└── .ruff_cache/                       # Ruff linter cache directory (generated)
+├── audio/                             # Audio processing directories
+│   ├── backup/                        # Processed audio files backup
+│   │   └── 2025-07-03/               # Daily backup folders
+│   └── output/                        # Generated transcription outputs
+├── logs/                              # Application log files
+│   └── transcribe.log                # Main application log
+├── scripts/                           # Utility scripts
+│   └── bss-pyatranscribe.sh          # Bash script for service management
+├── reference/                         # Reference implementation (not tracked in git)
+│   └── Whisper-WebUI-concise/        # Reference architecture patterns
+└── temp/                              # Temporary files directory
 ```
 
 ## Source Code Structure (`src/`)
@@ -120,9 +142,35 @@ tests/
 ## Reference Directory (`reference/`)
 
 ```
-reference/                             # Reference implementation (not tracked in git)
-└── Whisper-WebUI/                     # Reference architecture patterns
-    └── [external reference files]     # Used for architectural guidance
+reference/                             # Reference implementation and documentation
+├── Whisper-WebUI-concise/            # Reference architecture patterns
+│   ├── backend/                      # Backend service architecture
+│   ├── configs/                      # Configuration examples
+│   ├── models/                       # Model storage structure
+│   ├── modules/                      # Core processing modules
+│   └── requirements.txt              # Reference dependencies
+├── Docker/                           # Docker reference configurations
+├── [analysis and documentation files] # Technical analysis and debugging notes
+└── [external reference files]        # Used for architectural guidance
+```
+
+## Runtime Directories
+
+```
+audio/                                # Audio processing workspace
+├── backup/                           # Processed files backup
+│   └── 2025-07-03/                  # Daily organized backups
+├── input/                            # Monitored input directory (created at runtime)
+└── output/                           # Generated transcription outputs
+    ├── *.srt                         # Subtitle files with speaker labels
+    ├── *.tsv                         # Tab-separated transcription data
+    └── *.txt                         # Plain text transcriptions
+
+logs/                                 # Application logging
+└── transcribe.log                    # Main application log file
+
+temp/                                 # Temporary processing files
+└── [runtime temporary files]         # Cleaned up automatically
 ```
 
 ## Key File Descriptions
@@ -136,9 +184,10 @@ reference/                             # Reference implementation (not tracked i
 
 ### Core Application Files
 
-- **auto_diarize_transcribe.py**: Main application entry point with enhanced diagnostics
+- **auto_diarize_transcribe.py**: Main application entry point with enhanced diagnostics and system monitoring
 - **src/config.py**: Pydantic-based configuration management with validation
 - **src/pipeline/batch_transcriber.py**: Main processing pipeline coordinator
+- **entrypoint.sh**: Docker container initialization script
 
 ### Processing Modules
 
@@ -154,16 +203,21 @@ reference/                             # Reference implementation (not tracked i
 
 ### Docker Configuration
 
-- **Dockerfile**: Multi-stage build for optimized production deployment
-- **docker-compose.yaml**: Complete stack with optional Prometheus/Grafana monitoring
+- **Dockerfile**: Multi-stage build for optimized production deployment with CUDA support
+- **docker-compose.yaml**: Complete stack with volume mounting for audio processing
+- **entrypoint.sh**: Container startup script for proper initialization
+
+### Scripts and Utilities
+
+- **scripts/bss-pyatranscribe.sh**: Bash script for service management and automation
+- **temp/**: Temporary files directory for processing intermediate files
 
 ### Documentation
 
-- **py-atranscribe.md**: Comprehensive Software Design Document (SDD)
 - **CLAUDE.md**: Instructions and context for AI assistant development
 - **CHANGELOG.md**: Version history following Keep a Changelog format
-- **linting-errors.md**: Comprehensive Ruff linting analysis report with prioritized action plan
-- **transcribe_diarize.md**: Additional technical documentation and specifications
+- **FAIILURELOG.md**: Documentation of failed attempts and debugging notes
+- **reference/**: Reference implementation analysis and technical documentation
 
 ## Architecture Overview
 
@@ -181,8 +235,11 @@ The project follows a modular architecture with clear separation of concerns:
 1. **Source Code**: All application logic is in `src/` with modular organization
 2. **Testing**: Comprehensive unit tests in `tests/` directory
 3. **Configuration**: Environment-specific settings via YAML and environment variables
-4. **Docker**: Production deployment using multi-stage Docker builds
+4. **Docker**: Production deployment using multi-stage Docker builds with CUDA support
 5. **Documentation**: Maintained in Markdown files with architectural decisions recorded
+6. **Processing**: Audio files processed through `audio/` directory structure
+7. **Logging**: Centralized logging in `logs/` directory for monitoring and debugging
+8. **Scripts**: Utility scripts in `scripts/` directory for automation and management
 
 ## File Naming Conventions
 
@@ -190,5 +247,9 @@ The project follows a modular architecture with clear separation of concerns:
 - **Configuration files**: lowercase with extensions (e.g., `config.yaml`)
 - **Documentation**: UPPERCASE for key files (e.g., `README.md`, `CHANGELOG.md`)
 - **Docker files**: Standard naming (e.g., `Dockerfile`, `docker-compose.yaml`)
+- **Audio files**: Timestamped format (e.g., `audio_20250703_030630_22kHz.flac`)
+- **Output files**: Match input filename with format extension (e.g., `*.srt`, `*.tsv`, `*.txt`)
+- **Log files**: Descriptive naming (e.g., `transcribe.log`)
+- **Script files**: Descriptive with extension (e.g., `bss-pyatranscribe.sh`)
 
-This structure supports maintainable, scalable development while adhering to Python packaging standards and Docker best practices.
+This structure supports maintainable, scalable development while adhering to Python packaging standards and Docker best practices. The audio processing workflow is optimized for continuous monitoring and automated transcription with speaker diarization.

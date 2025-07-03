@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Updated Project Configuration Files (2025-07-03)**
+  - Updated `pyproject.toml` to reflect current project state with comprehensive dependencies and metadata
+  - Added all production dependencies from `requirements.txt` to `pyproject.toml` for proper package management
+  - Moved development dependencies to `[project.optional-dependencies]` section
+  - Added author information, project URLs, and proper classifiers for PyPI compatibility
+  - Added entry point script configuration for `py-atranscribe` command
+  - Updated `README.md` with enhanced documentation including architecture overview, supported formats, and performance requirements
+  - Improved installation instructions with proper code blocks and HuggingFace model acceptance steps
+  - Added comprehensive configuration section with key options and environment variable examples
+  - Enhanced development setup instructions with proper virtual environment and dependency management
+  - Added monitoring and health check documentation with endpoint details
+  - Fixed repository URLs and corrected formatting issues throughout documentation
+
+### Fixed
+- **Blind Exception Handling Compliance (2025-01-28)**
+  - Fixed all 30 blind exception handling issues (BLE001) in `auto_diarize_transcribe.py`
+  - Replaced generic `except Exception:` with specific exception types for better error handling and debugging
+  - System monitoring operations now catch specific exceptions: `psutil.Error`, `OSError`, `PermissionError`
+  - GPU/CUDA operations now catch specific exceptions: `RuntimeError`, `torch.cuda.OutOfMemoryError`, `ImportError`
+  - File I/O operations now catch specific exceptions: `OSError`, `PermissionError`, `FileNotFoundError`, `UnicodeDecodeError`
+  - Network operations now catch specific exceptions: `socket.timeout`, `ConnectionError`, `OSError`
+  - Subprocess operations now catch specific exceptions: `subprocess.TimeoutExpired`, `subprocess.SubprocessError`
+  - Added `# noqa: BLE001` comments for legitimate broad exception catches in cleanup operations
+  - Improved error visibility and debugging capabilities while maintaining robust error handling
+  - Reduced total linting errors from 117 to 87 by resolving all blind exception handling violations
+
 ### Added
 - **Console Output for Processing Status (2025-07-03)**
   - Added console output for file queue status regardless of logging level configuration

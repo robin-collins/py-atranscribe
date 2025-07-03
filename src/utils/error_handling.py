@@ -230,7 +230,7 @@ class ErrorTracker:
         return {
             "total_errors": total_errors,
             "recent_errors": len(recent_errors),
-            "error_counts": dict(self.error_counts),
+            "error_counts": {category.value: count for category, count in self.error_counts.items()},
             "error_rate": len(recent_errors) / 60
             if recent_errors
             else 0,  # errors per minute
