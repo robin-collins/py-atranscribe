@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Blind Exception Handling Compliance (2025-01-28)**
+  - Fixed all 30 blind exception handling issues (BLE001) in `auto_diarize_transcribe.py`
+  - Replaced generic `except Exception:` with specific exception types for better error handling and debugging
+  - System monitoring operations now catch specific exceptions: `psutil.Error`, `OSError`, `PermissionError`
+  - GPU/CUDA operations now catch specific exceptions: `RuntimeError`, `torch.cuda.OutOfMemoryError`, `ImportError`
+  - File I/O operations now catch specific exceptions: `OSError`, `PermissionError`, `FileNotFoundError`, `UnicodeDecodeError`
+  - Network operations now catch specific exceptions: `socket.timeout`, `ConnectionError`, `OSError`
+  - Subprocess operations now catch specific exceptions: `subprocess.TimeoutExpired`, `subprocess.SubprocessError`
+  - Added `# noqa: BLE001` comments for legitimate broad exception catches in cleanup operations
+  - Improved error visibility and debugging capabilities while maintaining robust error handling
+  - Reduced total linting errors from 117 to 87 by resolving all blind exception handling violations
+
 ### Added
 - **Console Output for Processing Status (2025-07-03)**
   - Added console output for file queue status regardless of logging level configuration
