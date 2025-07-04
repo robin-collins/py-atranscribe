@@ -100,10 +100,28 @@ class Diarizer:
 
             self.logger.info("Initializing diarization pipeline: %s", self.config.model)
 
+            # Announce model download start
+            self.logger.info(
+                "🔽 Downloading diarization model '%s'...", self.config.model
+            )
+            print(
+                f"🔽 Downloading diarization model '{self.config.model}'...", flush=True
+            )
+
             # Load the diarization pipeline
             self.pipeline = Pipeline.from_pretrained(
                 self.config.model,
                 use_auth_token=self.config.hf_token if self.config.hf_token else True,
+            )
+
+            # Announce download completion
+            self.logger.info(
+                "✅ Diarization model '%s' download completed successfully",
+                self.config.model,
+            )
+            print(
+                f"✅ Diarization model '{self.config.model}' download completed successfully",
+                flush=True,
             )
 
             # Set device

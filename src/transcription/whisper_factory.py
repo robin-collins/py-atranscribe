@@ -401,8 +401,21 @@ class WhisperFactory:
 
         """
         try:
+            # Announce model download start
+            model_name = model_kwargs.get("model_size_or_path", "unknown")
+            self.logger.info(
+                "🔽 Downloading Whisper model '%s' (device: %s, compute: %s)...",
+                model_name,
+                device,
+                compute_type,
+            )
+            print(
+                f"🔽 Downloading Whisper model '{model_name}' (device: {device}, compute: {compute_type})...",
+                flush=True,
+            )
+
             # First attempt: Normal model creation
-            return WhisperModel(**model_kwargs)
+            model = WhisperModel(**model_kwargs)
 
         except Exception as e:
             error_msg = str(e).lower()
@@ -429,6 +442,17 @@ class WhisperFactory:
 
             # Re-raise the original exception if cuDNN workarounds didn't help
             raise
+        else:
+            # Announce completion
+            self.logger.info(
+                "✅ Whisper model '%s' download completed successfully", model_name
+            )
+            print(
+                f"✅ Whisper model '{model_name}' download completed successfully",
+                flush=True,
+            )
+
+            return model
 
     def _try_cudnn_workarounds(self, model_kwargs: dict) -> WhisperModel | None:
         """Try cuDNN workarounds with environment variables."""
@@ -461,10 +485,22 @@ class WhisperFactory:
             self.logger.info(
                 "Retrying model creation with cuDNN environment variables",
             )
+
+            # Announce retry attempt
+            model_name = model_kwargs.get("model_size_or_path", "unknown")
+            print(
+                f"🔄 Retrying Whisper model '{model_name}' download with cuDNN workarounds...",
+                flush=True,
+            )
+
             model = WhisperModel(**model_kwargs)
 
             self.logger.info(
                 "Successfully created model with cuDNN workarounds",
+            )
+            print(
+                f"✅ Whisper model '{model_name}' download completed with cuDNN workarounds",
+                flush=True,
             )
 
         except (RuntimeError, OSError, ImportError, ValueError) as cudnn_retry_error:
@@ -503,10 +539,21 @@ class WhisperFactory:
             torch.backends.cudnn.enabled = False
 
             try:
+                # Announce attempt
+                model_name = model_kwargs.get("model_size_or_path", "unknown")
+                print(
+                    f"🔄 Retrying Whisper model '{model_name}' download with cuDNN disabled...",
+                    flush=True,
+                )
+
                 model = WhisperModel(**model_kwargs)
                 self.logger.warning(
                     "Successfully created model with cuDNN disabled - "
                     "performance may be reduced",
+                )
+                print(
+                    f"✅ Whisper model '{model_name}' download completed with cuDNN disabled",
+                    flush=True,
                 )
                 return model
             finally:
@@ -534,10 +581,21 @@ class WhisperFactory:
                 },
             )
 
+            # Announce CPU fallback attempt
+            model_name = model_kwargs.get("model_size_or_path", "unknown")
+            print(
+                f"🔄 Falling back to CPU for Whisper model '{model_name}' due to cuDNN issues...",
+                flush=True,
+            )
+
             model = WhisperModel(**cpu_kwargs)
             self.logger.warning(
                 "Successfully created model on CPU due to cuDNN issues - "
                 "performance will be significantly reduced",
+            )
+            print(
+                f"✅ Whisper model '{model_name}' download completed on CPU fallback",
+                flush=True,
             )
 
         except Exception as cpu_fallback_error:
@@ -902,8 +960,17 @@ class FasterWhisperInference:
                 "num_workers": self.config.num_workers,
             }
 
+            # Announce CPU fallback model creation
+            print(
+                f"🔄 Creating CPU fallback Whisper model '{model_size}'...", flush=True
+            )
+
             fallback_model = WhisperModel(**model_kwargs)
             self.logger.info("Successfully created CPU fallback model")
+            print(
+                f"✅ CPU fallback Whisper model '{model_size}' created successfully",
+                flush=True,
+            )
         except Exception as e:
             self.logger.exception("Failed to create CPU fallback model: %s", e)
             return None

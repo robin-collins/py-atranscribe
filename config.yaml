@@ -45,20 +45,20 @@ monitoring:
     - ".f4b"
 
   # File stability check (seconds to wait before processing)
-  stability_delay: 3600
+  stability_delay: 15
 
   # Polling interval (seconds)
-  poll_interval: 1800
+  poll_interval: 300
 
 # Transcription settings
 transcription:
   # Whisper model configuration
   whisper:
-    model_size: "large-v3"        # tiny, base, small, medium, large-v1, large-v2, large-v3
+    model_size: "base"        # tiny, base, small, medium, large-v1, large-v2, large-v3
     device: "auto"              # auto, cpu, cuda (auto recommended for cuDNN issues)
     compute_type: "auto"        # auto, int8, int16, float16, float32 (auto recommended)
     cpu_threads: 0              # 0 = auto
-    num_workers: 1              # Number of parallel workers
+    num_workers: 4              # Number of parallel workers
 
   # Audio preprocessing
   preprocessing:

@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Improved file organization making it easier to locate specific format types
   - Example: `/output/srt/`, `/output/txt/`, `/output/json/`, etc.
 
+### Added
+- **Model Download Announcements (2025-07-04)**
+  - Added console announcements when HuggingFace models are being downloaded
+  - Whisper model downloads now display start and completion messages with model details (device, compute type)
+  - Diarization model downloads now display start and completion messages
+  - Enhanced visibility for model download progress during startup and fallback scenarios
+  - Announcements appear both in logs and console output (similar to startup checks)
+  - Added announcements for retry attempts with cuDNN workarounds and CPU fallbacks
+  - Improved user experience by providing clear feedback during potentially long download processes
+
 ### Fixed
 - **Code Complexity Reduction (2025-01-28)**
   - Resolved all 9 C901 complexity warnings (complexity > 10) by refactoring complex methods into smaller, focused helper functions
