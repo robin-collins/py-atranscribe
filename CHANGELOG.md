@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Output Directory Organization (2025-07-04)**
+  - Modified subtitle manager to organize output files by format type into subdirectories
+  - Each transcription format (SRT, WebVTT, TXT, JSON, TSV, LRC) now gets saved in its own subdirectory under the output directory
+  - Updated `SubtitleManager._save_single_format` to create format-specific subdirectories automatically
+  - Improved file organization making it easier to locate specific format types
+  - Example: `/output/srt/`, `/output/txt/`, `/output/json/`, etc.
+
 ### Fixed
 - **Code Complexity Reduction (2025-01-28)**
   - Resolved all 9 C901 complexity warnings (complexity > 10) by refactoring complex methods into smaller, focused helper functions

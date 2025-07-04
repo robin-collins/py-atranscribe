@@ -39,15 +39,18 @@
 │  │      ├── audio_20250703_031133_22kHz.flac
 │  │      └── audio_20250703_031635_22kHz.flac
 │  └── output/
-│      ├── audio_20250703_030630_22kHz.srt
-│      ├── audio_20250703_030630_22kHz.tsv
-│      ├── audio_20250703_030630_22kHz.txt
-│      ├── audio_20250703_031133_22kHz.srt
-│      ├── audio_20250703_031133_22kHz.tsv
-│      ├── audio_20250703_031133_22kHz.txt
-│      ├── audio_20250703_031635_22kHz.srt
-│      ├── audio_20250703_031635_22kHz.tsv
-│      └── audio_20250703_031635_22kHz.txt
+│      ├── srt/
+│      │   ├── audio_20250703_030630_22kHz.srt
+│      │   ├── audio_20250703_031133_22kHz.srt
+│      │   └── audio_20250703_031635_22kHz.srt
+│      ├── tsv/
+│      │   ├── audio_20250703_030630_22kHz.tsv
+│      │   ├── audio_20250703_031133_22kHz.tsv
+│      │   └── audio_20250703_031635_22kHz.tsv
+│      └── txt/
+│          ├── audio_20250703_030630_22kHz.txt
+│          ├── audio_20250703_031133_22kHz.txt
+│          └── audio_20250703_031635_22kHz.txt
 ├── logs/
 │  └── transcribe.log
 ├── reference/
@@ -162,9 +165,12 @@ audio/                                # Audio processing workspace
 │   └── 2025-07-03/                  # Daily organized backups
 ├── input/                            # Monitored input directory (created at runtime)
 └── output/                           # Generated transcription outputs
-    ├── *.srt                         # Subtitle files with speaker labels
-    ├── *.tsv                         # Tab-separated transcription data
-    └── *.txt                         # Plain text transcriptions
+    ├── srt/                          # SRT subtitle files with speaker labels
+    ├── webvtt/                       # WebVTT subtitle files
+    ├── txt/                          # Plain text transcriptions
+    ├── json/                         # JSON format with detailed metadata
+    ├── tsv/                          # Tab-separated transcription data
+    └── lrc/                          # LRC lyric format files
 
 logs/                                 # Application logging
 └── transcribe.log                    # Main application log file

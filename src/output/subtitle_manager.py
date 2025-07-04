@@ -128,22 +128,37 @@ class SubtitleManager:
         """
         format_lower = format_name.lower()
 
+        # Create format-specific subdirectory
+        format_dir = output_path.parent / format_lower
+        format_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create output path in format subdirectory
+        format_output_path = format_dir / output_path.name
+
         if format_lower == "srt":
-            return self._save_srt(transcript_segments, output_path.with_suffix(".srt"))
+            return self._save_srt(
+                transcript_segments, format_output_path.with_suffix(".srt")
+            )
         elif format_lower == "webvtt":
             return self._save_webvtt(
-                transcript_segments, output_path.with_suffix(".vtt")
+                transcript_segments, format_output_path.with_suffix(".vtt")
             )
         elif format_lower == "txt":
-            return self._save_txt(transcript_segments, output_path.with_suffix(".txt"))
+            return self._save_txt(
+                transcript_segments, format_output_path.with_suffix(".txt")
+            )
         elif format_lower == "json":
             return self._save_json(
-                transcript_segments, output_path.with_suffix(".json"), metadata
+                transcript_segments, format_output_path.with_suffix(".json"), metadata
             )
         elif format_lower == "tsv":
-            return self._save_tsv(transcript_segments, output_path.with_suffix(".tsv"))
+            return self._save_tsv(
+                transcript_segments, format_output_path.with_suffix(".tsv")
+            )
         elif format_lower == "lrc":
-            return self._save_lrc(transcript_segments, output_path.with_suffix(".lrc"))
+            return self._save_lrc(
+                transcript_segments, format_output_path.with_suffix(".lrc")
+            )
         else:
             self.logger.warning("Unsupported format: %s", format_name)
             return None
