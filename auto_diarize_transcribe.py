@@ -2000,6 +2000,270 @@ class TranscriptionService:
         # Log final worker statistics
         self._log_worker_final_stats(worker_id, worker_stats, worker_logger)
 
+    async def _process_file_in_worker(
+        self,
+        worker_id: int,
+        file_path: Path,
+        worker_stats: dict,
+        worker_logger: logging.Logger,
+    ) -> None:
+        """Process a single file in a worker."""
+        # Update stats
+        self._processing_stats["files_queued"] += 1
+        self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
+        worker_stats["last_activity"] = time.time()
+
+        # Process the file
+        processing_start = time.time()
+
+        try:
+            # Create progress callback for this file
+            def progress_callback(
+                progress: ProcessingProgress, current_file: Path = file_path
+            ) -> None:
+                """Handle progress updates for file processing."""
+                worker_logger.debug(
+                    "Worker %s progress for %s: %s (%.1f%%)",
+                    worker_id,
+                    current_file.name,
+                    progress.stage,
+                    progress.percentage,
+                )
+
+                # Update last activity timestamp
+                self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
+                worker_stats["last_activity"] = time.time()
+
+            # Process the file with progress tracking
+            result = await self.batch_transcriber.process_file(
+                file_path,
+                progress_callback=progress_callback,
+            )
+
+            processing_time = time.time() - processing_start
+
+            # Handle processing result
+            if result.success:
+                await self._handle_successful_processing(
+                    worker_id,
+                    file_path,
+                    processing_time,
+                    result,
+                    worker_stats,
+                    worker_logger,
+                )
+            else:
+                await self._handle_failed_processing(
+                    worker_id,
+                    file_path,
+                    processing_time,
+                    result,
+                    worker_stats,
+                    worker_logger,
+                )
+
+        except (
+            OSError,
+            IOError,
+            RuntimeError,
+            asyncio.CancelledError,
+            KeyboardInterrupt,
+        ) as e:
+            # Handle any exception that occurs during processing
+            processing_time = time.time() - processing_start
+            await self._handle_processing_exception(
+                worker_id, file_path, processing_time, e, worker_stats, worker_logger
+            )
+        except Exception as e:  # noqa: BLE001
+            # Handle any other unexpected exception that occurs during processing
+            processing_time = time.time() - processing_start
+            await self._handle_processing_exception(
+                worker_id, file_path, processing_time, e, worker_stats, worker_logger
+            )
+
+        finally:
+            # Mark task as done in queue
+            await self.processing_queue.mark_done(file_path)
+
+    async def _handle_successful_processing(
+        self,
+        worker_id: int,
+        file_path: Path,
+        processing_time: float,
+        result: Any,
+        worker_stats: dict,
+        worker_logger: logging.Logger,
+    ) -> None:
+        """Handle successful file processing."""
+        worker_logger.info(
+            "✅ Worker %s successfully processed %s in %.2fs (transcription: %.2fs)",
+            worker_id,
+            file_path.name,
+            processing_time,
+            result.processing_time,
+        )
+
+        # Console output regardless of log level
+        language = "unknown"
+        duration = 0
+        speakers = 0
+        if result.transcription_info:
+            language = result.transcription_info.get("language", "unknown")
+        if result.metadata:
+            duration = result.metadata.get("duration", 0)
+            speakers = result.metadata.get("num_speakers", 0)
+
+        print(
+            f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - "
+            f"{language}, {duration:.1f}s, {speakers} speakers",
+            flush=True,
+        )
+
+        # Update statistics
+        worker_stats["files_processed"] += 1
+        worker_stats["total_processing_time"] += processing_time
+        self._processing_stats["files_completed"] += 1
+        self._processing_stats["total_processing_time"] += processing_time
+
+        # Mark file as processed in monitor
+        self.file_monitor.mark_file_processed(file_path)
+
+        # Log processing metadata if available
+        if result.metadata:
+            worker_logger.info(
+                "File metadata - Duration: %.1fs, Segments: %d, Speakers: %d, Language: %s",
+                result.metadata.get("duration", 0),
+                result.metadata.get("num_segments", 0),
+                result.metadata.get("num_speakers", 0),
+                result.transcription_info.get("language", "unknown")
+                if result.transcription_info
+                else "unknown",
+            )
+
+        # Print updated queue status to console
+        await self._print_queue_count()
+
+    async def _handle_failed_processing(
+        self,
+        worker_id: int,
+        file_path: Path,
+        processing_time: float,
+        result: Any,
+        worker_stats: dict,
+        worker_logger: logging.Logger,
+    ) -> None:
+        """Handle failed file processing."""
+        worker_logger.error(
+            "❌ Worker %s failed to process %s after %.2fs: %s",
+            worker_id,
+            file_path.name,
+            processing_time,
+            result.error_message,
+        )
+
+        # Console output regardless of log level
+        print(
+            f"❌ Failed: {file_path.name} ({processing_time:.1f}s) - {result.error_message}",
+            flush=True,
+        )
+
+        # Update failure statistics
+        worker_stats["files_failed"] += 1
+        self._processing_stats["files_failed"] += 1
+
+        # Print updated queue status to console
+        await self._print_queue_count()
+
+    async def _handle_processing_exception(
+        self,
+        worker_id: int,
+        file_path: Path,
+        processing_time: float,
+        exception: Exception,
+        worker_stats: dict,
+        worker_logger: logging.Logger,
+    ) -> None:
+        """Handle processing exception."""
+        worker_logger.exception(
+            "💥 Worker %s unexpected error processing %s after %.2fs: %s",
+            worker_id,
+            file_path.name,
+            processing_time,
+            exception,
+        )
+
+        # Console output regardless of log level
+        print(
+            f"💥 Error: {file_path.name} ({processing_time:.1f}s) - {exception!s}",
+            flush=True,
+        )
+
+        worker_stats["files_failed"] += 1
+        self._processing_stats["files_failed"] += 1
+
+        # Print updated queue status to console
+        await self._print_queue_count()
+
+    def _log_worker_final_stats(
+        self, worker_id: int, worker_stats: dict, worker_logger: logging.Logger
+    ) -> None:
+        """Log final worker statistics."""
+        total_time = worker_stats["total_processing_time"]
+        files_processed = worker_stats["files_processed"]
+        avg_time = total_time / files_processed if files_processed > 0 else 0
+
+        worker_logger.info(
+            "Worker %s finished - Processed: %d files, Failed: %d files, "
+            "Total time: %.2fs, Average: %.2fs per file",
+            worker_id,
+            files_processed,
+            worker_stats["files_failed"],
+            total_time,
+            avg_time,
+        )
+
+    async def _log_queue_status(self) -> None:
+        """Log current processing queue status."""
+        try:
+            if self.processing_queue:
+                status = await self.processing_queue.get_status()
+                self.logger.info(
+                    "📦 Queue status: %d queued, %d processing, %d max",
+                    status["queued"],
+                    status["processing"],
+                    status["max_size"],
+                )
+        except Exception:
+            self.logger.exception("Error getting queue status")
+
+    async def _log_queue_status_and_count(self) -> None:
+        """Log queue status and print files waiting count to console."""
+        try:
+            await self._log_queue_status()
+
+            if self.processing_queue:
+                status = await self.processing_queue.get_status()
+                # Console output regardless of log level
+                print(
+                    f"📋 Files waiting: {status['queued']}, Processing: {status['processing']}",
+                    flush=True,
+                )
+        except Exception:
+            self.logger.exception("Error logging queue status and count")
+
+    async def _print_queue_count(self) -> None:
+        """Print current queue count to console regardless of log level."""
+        try:
+            if self.processing_queue:
+                status = await self.processing_queue.get_status()
+                print(
+                    f"📋 Queue: {status['queued']} waiting, {status['processing']} processing",
+                    flush=True,
+                )
+        except Exception:  # noqa: BLE001,S110
+            # Silently ignore exceptions for console output helper to prevent log spam
+            pass
+
     def _on_file_detected(self, file_path: Path) -> None:
         """Handle callback when a new file is detected and ready for processing.
 
@@ -2025,46 +2289,13 @@ class TranscriptionService:
             )
 
             # Console output regardless of log level
+            print(f"📁 Queued: {file_path.name} ({file_size_mb:.1f} MB)", flush=True)
 
             # Log queue status and print files waiting count
             _ = asyncio.create_task(self._log_queue_status_and_count())  # noqa: RUF006
 
         except Exception:
             self.logger.exception("❌ Failed to queue file %s", file_path)
-
-    async def _log_queue_status(self) -> None:
-        """Log current processing queue status."""
-        try:
-            if self.processing_queue:
-                status = await self.processing_queue.get_status()
-                self.logger.info(
-                    "📦 Queue status: %d queued, %d processing, %d max",
-                    status["queued"],
-                    status["processing"],
-                    status["max_size"],
-                )
-        except Exception:
-            self.logger.exception("Error getting queue status")
-
-    async def _log_queue_status_and_count(self) -> None:
-        """Log queue status and print files waiting count to console."""
-        try:
-            await self._log_queue_status()
-
-            if self.processing_queue:
-                await self.processing_queue.get_status()
-                # Console output regardless of log level
-        except Exception:
-            self.logger.exception("Error logging queue status and count")
-
-    async def _print_queue_count(self) -> None:
-        """Print current queue count to console regardless of log level."""
-        try:
-            if self.processing_queue:
-                await self.processing_queue.get_status()
-        except Exception:  # noqa: BLE001, S110
-            # Don't log exceptions for console output helper
-            pass
 
     async def wait_for_completion(self) -> None:
         """Wait for service shutdown completion."""

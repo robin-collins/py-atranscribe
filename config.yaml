@@ -119,7 +119,7 @@ performance:
 
 # Logging configuration
 logging:
-  level: "CRITICAL"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "DEBUG"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
   format: "structured"          # "structured" (JSON) or "plain"
   file_enabled: true           # Enable file logging (in addition to stdout)
   file_path: "/var/log/transcribe.log"
