@@ -62,11 +62,9 @@ class Diarizer:
         """Initialize Diarizer with configuration.
 
         Args:
-        ----
             config: Diarization configuration
 
         Raises:
-        ------
             ModelError: If initialization fails
 
         """
@@ -182,11 +180,9 @@ class Diarizer:
         """Perform speaker diarization on audio file.
 
         Args:
-        ----
             audio_path: Path to audio file
 
         Returns:
-        -------
             DiarizationResult | None: Diarization results with speaker information, or None if diarization fails
 
         """
@@ -231,7 +227,7 @@ class Diarizer:
                     raise
 
             # Validate diarization results
-            if diarization is None or len(diarization) == 0:
+            if diarization is None or not diarization.labels():
                 self.logger.warning(
                     "Diarization produced no results for %s",
                     audio_path,
@@ -248,7 +244,7 @@ class Diarizer:
             speakers = self._extract_speakers(diarization, duration)
             segments = self._create_segments(diarization)
 
-            DiarizationResult(
+            result = DiarizationResult(
                 speakers=speakers,
                 segments=segments,
                 duration=duration,
@@ -261,6 +257,8 @@ class Diarizer:
                 len(speakers),
                 len(segments),
             )
+            return result  # BUG FIX: Added return statement
+
         except Exception:
             self.logger.exception("Diarization failed for %s", audio_path)
             # Return None on failure to allow graceful degradation
@@ -274,12 +272,10 @@ class Diarizer:
         """Extract speaker information from diarization annotation.
 
         Args:
-        ----
             diarization: Pyannote diarization annotation
             total_duration: Total audio duration
 
         Returns:
-        -------
             List of detected speakers
 
         """
@@ -322,11 +318,9 @@ class Diarizer:
         """Create time-based segments with speaker labels.
 
         Args:
-        ----
             diarization: Pyannote diarization annotation
 
         Returns:
-        -------
             List of segments with speaker information
 
         """
@@ -370,16 +364,14 @@ class Diarizer:
         """Calculate overall confidence score for diarization.
 
         Args:
-        ----
             diarization: Pyannote diarization annotation
 
         Returns:
-        -------
             Confidence score between 0 and 1
 
         """
         try:
-            if len(diarization) == 0:
+            if not diarization.labels():
                 return 0.0
 
             # Simple confidence based on coverage - with defensive programming
@@ -418,76 +410,154 @@ class Diarizer:
             self.logger.warning("Error calculating confidence: %s", e)
             return 0.0
 
+    def _merge_speaker_turns(
+        self, diarization_result: DiarizationResult
+    ) -> list[dict[str, Any]]:
+        """Merge consecutive diarization segments from the same speaker into single turns.
+
+        This is a direct adaptation of the pre-processing logic in insanely-fast-whisper.
+
+        Args:
+            diarization_result: The raw diarization result containing speaker segments.
+
+        Returns:
+            A list of merged speaker turns, each with a start, end, and speaker label.
+
+        """
+        dia_segments = diarization_result.segments
+        if not dia_segments:
+            return []
+
+        merged_speaker_turns = []
+        prev_segment = cur_segment = dia_segments[0]
+
+        for i in range(1, len(dia_segments)):
+            cur_segment = dia_segments[i]
+            # Check if speaker has changed
+            if cur_segment["speaker_label"] != prev_segment["speaker_label"]:
+                # Add the merged segment to the new list
+                merged_speaker_turns.append(
+                    {
+                        "start": prev_segment["start"],
+                        "end": cur_segment["start"],  # End of turn is start of next
+                        "speaker": prev_segment["speaker_label"],
+                    }
+                )
+                prev_segment = cur_segment
+
+        # Add the final speaker turn
+        merged_speaker_turns.append(
+            {
+                "start": prev_segment["start"],
+                "end": cur_segment["end"],
+                "speaker": prev_segment["speaker_label"],
+            }
+        )
+
+        return merged_speaker_turns
+
+    def _align_segments_by_timestamp(
+        self,
+        merged_turns: list[dict[str, Any]],
+        transcript_segments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Align speaker turns with transcription segments using the closest end timestamp.
+
+        This is a direct adaptation of the post-processing logic in insanely-fast-whisper.
+
+        Args:
+            merged_turns: A list of merged speaker turns.
+            transcript_segments: A list of segments from the transcription model.
+
+        Returns:
+            The list of transcription segments, now with speaker labels assigned.
+
+        """
+        transcript = list(transcript_segments)
+        end_timestamps = np.array(
+            [
+                chunk["end"] if chunk.get("end") is not None else sys.float_info.max
+                for chunk in transcript
+            ]
+        )
+
+        labeled_segments = []
+
+        for turn in merged_turns:
+            if not transcript:
+                break  # No more transcription chunks to process
+
+            end_time = turn["end"]
+
+            # Find the ASR chunk with the end timestamp closest to the speaker turn's end time
+            upto_idx = np.argmin(np.abs(end_timestamps - end_time))
+
+            # Assign the current speaker to all transcription chunks up to that index
+            for i in range(upto_idx + 1):
+                chunk_to_label = transcript[i]
+                chunk_to_label["speaker"] = turn["speaker"]
+                chunk_to_label["speaker_confidence"] = 1.0  # Method is deterministic
+                labeled_segments.append(chunk_to_label)
+
+            # Crop the transcript and timestamp lists for the next iteration
+            transcript = transcript[upto_idx + 1 :]
+            if transcript:
+                end_timestamps = end_timestamps[upto_idx + 1 :]
+            else:
+                end_timestamps = np.array([])
+
+        # If any transcription segments remain, assign them to the last known speaker
+        if transcript:
+            last_speaker = merged_turns[-1]["speaker"] if merged_turns else "SPEAKER_00"
+            for remaining_chunk in transcript:
+                remaining_chunk["speaker"] = last_speaker
+                remaining_chunk["speaker_confidence"] = 0.5  # Lower confidence
+                labeled_segments.append(remaining_chunk)
+
+        return labeled_segments
+
     def assign_speakers_to_segments(
         self,
         transcription_segments: list[dict[str, Any]],
         diarization_result: DiarizationResult,
     ) -> list[dict[str, Any]]:
-        """Assign speaker labels to transcription segments based on overlap.
+        """Assign speaker labels to transcription segments using the insanely-fast-whisper algorithm.
+
+        This function orchestrates the merging of speaker turns and the alignment with
+        transcription segments.
 
         Args:
-        ----
-            transcription_segments: Segments from transcription
-            diarization_result: Results from diarization
+            transcription_segments: Segments from transcription.
+            diarization_result: Results from diarization.
 
         Returns:
-        -------
-            List of segments with speaker assignments
+            A list of transcription segments with speaker labels assigned.
 
         """
-        if not self.config.enabled or not diarization_result.segments:
-            # Return segments without speaker labels if diarization is disabled
+        if (
+            not self.config.enabled
+            or not diarization_result
+            or not diarization_result.segments
+        ):
+            # Fallback: assign a default speaker if diarization is disabled or empty.
             for segment in transcription_segments:
                 segment["speaker"] = "SPEAKER_00"
                 segment["speaker_confidence"] = 0.0
             return transcription_segments
 
-        labeled_segments = []
+        # Step 1: Merge consecutive speaker segments into "turns".
+        merged_speaker_turns = self._merge_speaker_turns(diarization_result)
 
-        for trans_segment in transcription_segments:
-            trans_start = trans_segment["start"]
-            trans_end = trans_segment["end"]
-            trans_mid = (trans_start + trans_end) / 2
-
-            # Find overlapping diarization segments
-            best_speaker = "SPEAKER_00"
-            best_confidence = 0.0
-            max_overlap = 0.0
-
-            for dia_segment in diarization_result.segments:
-                dia_start = dia_segment["start"]
-                dia_end = dia_segment["end"]
-
-                # Calculate overlap
-                overlap_start = max(trans_start, dia_start)
-                overlap_end = min(trans_end, dia_end)
-                overlap_duration = max(0, overlap_end - overlap_start)
-
-                # Prefer segments that contain the midpoint or have maximum overlap
-                if (dia_start <= trans_mid <= dia_end) or (
-                    overlap_duration > max_overlap
-                ):
-                    max_overlap = overlap_duration
-                    best_speaker = dia_segment["speaker_label"]
-
-                    # Calculate confidence based on overlap ratio
-                    trans_duration = trans_end - trans_start
-                    if trans_duration > 0:
-                        best_confidence = overlap_duration / trans_duration
-                    else:
-                        best_confidence = 1.0 if overlap_duration > 0 else 0.0
-
-            # Add speaker information to segment
-            labeled_segment = trans_segment.copy()
-            labeled_segment["speaker"] = best_speaker
-            labeled_segment["speaker_confidence"] = best_confidence
-
-            labeled_segments.append(labeled_segment)
+        # Step 2: Align the speaker turns with transcription segments.
+        labeled_segments = self._align_segments_by_timestamp(
+            merged_speaker_turns, transcription_segments
+        )
 
         self.logger.debug(
-            "Assigned speakers to %d transcription segments",
+            "Assigned speakers to %d transcription segments using IFW method",
             len(labeled_segments),
         )
+
         return labeled_segments
 
     def get_speaker_statistics(
@@ -497,11 +567,9 @@ class Diarizer:
         """Get statistics about detected speakers.
 
         Args:
-        ----
             diarization_result: Diarization results
 
         Returns:
-        -------
             Dictionary with speaker statistics
 
         """

@@ -173,7 +173,7 @@ class EnhancedWhisperTranscriber:
             category=FutureWarning,
         )
 
-        # Suppress attention mask warnings (we'll handle this in generation)
+        # Suppress attention mask warnings (handled automatically by pipeline)
         warnings.filterwarnings(
             "ignore",
             message=".*attention mask is not set.*pad token.*eos token.*",
@@ -295,13 +295,10 @@ class EnhancedWhisperTranscriber:
         if hasattr(self.config, "language") and self.config.language != "auto":
             generate_kwargs["language"] = self.config.language
 
-        # Add timestamp and attention mask handling
+        # Add timestamp handling (let pipeline handle attention_mask automatically)
         generate_kwargs.update(
             {
                 "return_timestamps": True,
-                "attention_mask": None,  # Let the model handle this automatically
-                "return_dict_in_generate": True,
-                "output_scores": True,
             }
         )
 

@@ -167,6 +167,13 @@ else:
 - Performance optimizations not enabled (TF32, cuDNN benchmark)
 - Generation parameters missing attention mask and timestamp configurations
 - Console output cluttered with repeated warnings that should be suppressed
+- **FOLLOW-UP ISSUE**: Added `attention_mask: None` explicitly in generate_kwargs causing conflict with pipeline's internal attention mask handling
+
+### Additional Fix (Same Session):
+- Removed explicit `attention_mask`, `return_dict_in_generate`, and `output_scores` parameters from generate_kwargs
+- These parameters conflict with transformers ASR pipeline's internal handling
+- Keep only `return_timestamps: True` which is appropriate for ASR pipeline
+- Let the pipeline handle attention_mask automatically to avoid parameter conflicts
 
 ## 2025-01-27: Post-Processing Configuration Not Followed and Output Organization Issues
 

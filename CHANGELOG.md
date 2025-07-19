@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dependencies Alignment (2025-01-27)**
+  - Aligned dependencies between `pyproject.toml` and `requirements.txt` files
+  - **CHANGES MADE**:
+    - Added missing dependencies to pyproject.toml: `torchaudio>=2.0.0`, `accelerate>=0.20.0`, `flash-attn>=2.0.0`, `ffmpeg-normalize==1.32.5`, `noisereduce==3.0.3`, `numpy==1.26.4`, `scipy==1.14.1`
+    - Fixed torch version mismatch: changed from `>=2.7.1` to `>=2.0.0` to match requirements.txt
+    - Fixed version specifications to use exact versions (==) where specified in requirements.txt for `faster-whisper==1.1.1`, `pyannote.audio==3.3.2`, `transformers==4.47.1`, `ffmpeg-normalize==1.32.5`, `noisereduce==3.0.3`, `numpy==1.26.4`, `scipy==1.14.1`
+    - Removed duplicate `ruff>=0.12.1` from main dependencies (already present in dev dependencies)
+  - Both dependency files now have consistent and aligned package versions
+  - Modified: `pyproject.toml` - dependencies section
+
 ### Fixed
 - **Enhanced Whisper CUDA and Warning Issues Fix (2025-01-27)**
   - Fixed Flash Attention 2.0 model not being moved to CUDA after initialization
@@ -25,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Enhanced generation parameters with proper timestamp and attention handling
   - Flash Attention models now properly utilize GPU acceleration
   - Console output significantly cleaner with suppressed repeated warnings
-  - Modified: `src/transcription/enhanced_whisper.py` - initialization, optimizations, warning filters
+  - **FOLLOW-UP FIX**: Removed conflicting `attention_mask` parameter from generation kwargs that caused "got multiple values for keyword argument" error
+  - Modified: `src/transcription/enhanced_whisper.py` - initialization, optimizations, warning filters, generation parameters
 
 - **Diarization Method Name Error Fix (2025-01-27)**
   - Fixed AttributeError "'Diarizer' object has no attribute 'diarize_audio'" in enhanced_batch_transcriber.py
