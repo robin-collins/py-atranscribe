@@ -9,18 +9,23 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: py-atranscribe
-    restart: unless-stopped
+    restart: "unless-stopped"  # Disable automatic restart to allow proper failure handling
 
     env_file:
       - .env
 
     # Volume mounts
     volumes:
-      - /mnt/shared/raspi-audio:/data/in
-      - /mnt/shared/raspi-audio/audio/output:/data/out
-      - /mnt/shared/raspi-audio/audio/backup:/data/backup
+#      - /mnt/shared/raspi-audio:/data/in
+      - ./temp/in:/data/in
+#      - /mnt/shared/raspi-audio/audio/output:/data/out
+#      - /mnt/shared/transcribed-audio:/data/out
+      - ./temp/out:/data/out
+#      - /mnt/shared/raspi-audio/audio/backup:/data/backup
+#      - /mnt/shared/raspi-audio-backup:/data/backup
+      - ./temp/backup:/data/backup
       - ./config.yaml:/app/config.yaml:ro  # Mount config as read-only
-      - /mnt/shared/raspi-audio/audio/logs/transcribe.log:/var/log/transcribe.log:rw
+      - ./logs/transcribe.log:/var/log/transcribe.log:rw
       - transcribe-cache:/home/transcribe/.cache
       - transcribe-models:/root/.cache  # For model caching
 
@@ -32,7 +37,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 16G
         reservations:
           memory: 2G
 

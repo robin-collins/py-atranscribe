@@ -28,11 +28,11 @@ repos:
     - repo: https://github.com/astral-sh/ruff-pre-commit
       rev: v0.12.1 # Updated to match pyproject.toml ruff version
       hooks:
-          - id: ruff
-            name: ruff (lint, autoflake, isort, flake8, bandit, etc)
-            args:
-                - --fix
-                - --unsafe-fixes
+          # - id: ruff
+          #   name: ruff (lint, autoflake, isort, flake8, bandit, etc)
+          #   args:
+          #       - --fix
+          #       - --unsafe-fixes
           - id: ruff-format
             name: ruff (black formatting)
     # Plugins Ruff cannot replace

@@ -48,7 +48,7 @@ monitoring:
   stability_delay: 15
 
   # Polling interval (seconds)
-  poll_interval: 300
+  poll_interval: 30
 
 # Transcription settings
 transcription:
@@ -119,9 +119,9 @@ performance:
 
 # Logging configuration
 logging:
-  level: "DEBUG"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "ERROR"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
   format: "structured"          # "structured" (JSON) or "plain"
-  file_enabled: true           # Enable file logging (in addition to stdout)
+  file_enabled: false           # Enable file logging (in addition to stdout)
   file_path: "/var/log/transcribe.log"
 
 # Health check settings
@@ -139,8 +139,8 @@ health_check:
 metrics:
   enabled: false               # Enable Prometheus metrics endpoint
   port: 9090                   # Metrics endpoint port
-  system_metrics_interval: 30  # System metrics collection interval (seconds)
-  processing_metrics_interval: 10  # Processing metrics collection interval (seconds)
+  system_metrics_interval: 3600  # System metrics collection interval (seconds)
+  processing_metrics_interval: 30  # Processing metrics collection interval (seconds)
 
 # Note: Full Prometheus monitoring stack (Prometheus + Grafana) is configured
 # via Docker Compose and doesn't need to be in the main application config

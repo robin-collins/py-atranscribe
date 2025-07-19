@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Enhanced Whisper CUDA and Warning Issues Fix (2025-01-27)**
+  - Fixed Flash Attention 2.0 model not being moved to CUDA after initialization
+  - **ROOT CAUSE**: Flash Attention models require explicit `.to(device)` call after pipeline creation
+  - **SOLUTION**: Added explicit model device transfer and comprehensive optimizations:
+    - Explicitly move Flash Attention model to CUDA after pipeline creation
+    - Enable TensorFloat-32 (TF32) for enhanced CUDA performance
+    - Enable cuDNN auto-tuner for consistent workloads
+    - Added comprehensive warning filters for repeated warnings:
+      - Flash Attention device warnings (handled explicitly)
+      - Transformers input name deprecation warnings
+      - Attention mask warnings (handled in generation)
+      - PyAnnote TF32 warnings (enabled intentionally)
+      - PyTorch std() warnings from pyannote.audio
+      - Whisper timestamp prediction warnings
+    - Enhanced generation parameters with proper timestamp and attention handling
+  - Flash Attention models now properly utilize GPU acceleration
+  - Console output significantly cleaner with suppressed repeated warnings
+  - Modified: `src/transcription/enhanced_whisper.py` - initialization, optimizations, warning filters
+
+- **Diarization Method Name Error Fix (2025-01-27)**
+  - Fixed AttributeError "'Diarizer' object has no attribute 'diarize_audio'" in enhanced_batch_transcriber.py
+  - **ROOT CAUSE**: Code was calling non-existent `diarize_audio` method when the actual method is `diarize`
+  - **SOLUTION**: Fixed method call and added proper async execution:
+    - Changed `await self.diarizer.diarize_audio(file_path)` to proper async executor pattern
+    - Used `loop.run_in_executor()` with correct `diarize` method
+    - Converted file path to string as expected by the method
+  - Diarization pipeline now works correctly without AttributeError
+  - Modified: `src/pipeline/enhanced_batch_transcriber.py` - line 253
+
+- **TSV Format None Timing Values Fix (2025-01-27)**
+  - Fixed TypeError "unsupported operand type(s) for -: 'NoneType' and 'float'" in subtitle output formats
+  - **ROOT CAUSE**: Some transcript segments had None values for start/end times causing arithmetic errors
+  - **SOLUTION**: Added comprehensive null safety across all subtitle formats:
+    - Added validation to skip segments with None timing values
+    - Added detailed logging for skipped segments to aid debugging
+    - Applied fix to TSV, SRT, WebVTT, JSON, and TXT formats
+    - Enhanced `_format_timestamp()` and `_seconds_to_webvtt_time()` to handle None values
+  - All subtitle formats now handle malformed timing data gracefully
+  - Modified: `src/output/subtitle_manager.py` - lines 195, 225, 265, 285, 315, 420, 428
+
+- **Enhanced Batch Transcriber TypeError Fix (2025-01-27)**
+  - Fixed multiple TypeError "unsupported operand type(s) for -: 'NoneType' and 'float'" in enhanced_batch_transcriber.py
+  - **ROOT CAUSE**: Code assumed `chunk.get("timestamp", [0, 0])` always returns a list, but some chunks had `None` timestamps
+  - **SOLUTION**: Added comprehensive null checking and validation for timestamp data:
+    - Uses walrus operator to efficiently assign timestamp once
+    - Checks if timestamp is not None
+    - Validates timestamp is a list or tuple
+    - Ensures timestamp has at least 2 elements
+    - Validates both timestamp values are numeric (int or float)
+    - Added logging for skipped chunks with invalid timestamps
+  - Duration calculation now safely skips invalid timestamp data instead of crashing
+  - Fixed in multiple locations:
+    - Line 323: metadata duration calculation
+    - Line 400: statistics audio duration calculation
+    - Line 354: chunk to segment conversion with validation and logging
+
+- **Post-Processing and Output Organization Fixes (2025-01-27)**
+  - Fixed Enhanced Batch Transcriber not following post-processing configuration settings
+  - **ROOT CAUSE 1**: Enhanced batch transcriber had simplified post-processing that ignored backup_structure config
+  - **ROOT CAUSE 2**: Enhanced batch transcriber saved some output files directly to root output directory, bypassing format organization
+  - **SOLUTION**: Updated enhanced_batch_transcriber.py to match regular batch_transcriber behavior:
+    - Fixed `_post_process_file` to implement proper date-based backup structure (e.g., `/data/backup/2025-07-20`)
+    - Fixed `_generate_enhanced_outputs` to use SubtitleManager for all formats ensuring proper subdirectory organization
+    - All output formats now correctly organized into subfolders (`/data/out/srt`, `/data/out/tsv`, `/data/out/txt`, etc.)
+    - Added datetime import for date-based backup functionality
+  - Modified: `src/pipeline/enhanced_batch_transcriber.py` - lines 289, 383, imports
+
+- **Enhanced Batch Transcriber AttributeError Fix (2025-01-27)**
+  - Fixed AttributeError "'SubtitleManager' object has no attribute 'create_subtitle_file'" in enhanced_batch_transcriber.py
+  - **ROOT CAUSE**: Code was calling non-existent `create_subtitle_file` method on SubtitleManager
+  - **SOLUTION**: Replaced with correct `save_transcripts` method call:
+    - Removed erroneous `await` keyword (method is synchronous)
+    - Updated method parameters to match `save_transcripts` signature
+    - Fixed return value handling to work with dict-based response format
+  - Enhanced batch transcription pipeline now properly generates multiple subtitle formats (WebVTT, LRC, TSV) without errors
+  - Modified: `src/pipeline/enhanced_batch_transcriber.py` - fixed method call in `_generate_enhanced_outputs`
+
+- **NumPy/SciPy Compatibility Issue & Container Restart Loop (2025-01-27)**
+  - Fixed Docker container startup error caused by version mismatch between NumPy and SciPy
+  - **CRITICAL FIX**: Modified Dockerfile to install correct versions LAST to prevent override:
+    - NumPy 1.26.4 and SciPy 1.14.1 now installed with `--force-reinstall` after other packages
+    - Prevents requirements.txt dependencies from overriding explicit version constraints
+    - Ensures working versions persist on container rebuild
+  - Pinned exact working versions: NumPy==1.26.4 and SciPy==1.14.1 in requirements.txt
+  - Enhanced Dockerfile with more aggressive dependency resolution:
+    - Clears pip cache to prevent cached incompatible wheels
+    - Uninstalls conflicting packages (numpy, scipy, scikit-learn, pandas)
+    - Tests critical imports during build process to catch issues early
+  - Disabled automatic container restart (`restart: "no"`) in docker-compose.yaml to prevent restart loops
+  - Added fail-fast dependency testing in entrypoint.sh to exit cleanly on import errors
+  - Resolved `ValueError: All ufuncs must have type 'numpy.ufunc'` error during pyannote.audio import
+
 ### Changed
 - **Output Directory Organization (2025-07-04)**
   - Modified subtitle manager to organize output files by format type into subdirectories

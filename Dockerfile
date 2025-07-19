@@ -29,9 +29,23 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install additional dependencies (PyTorch packages already in base image)
+# Force reinstall NumPy and SciPy to ensure compatible versions
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    # Remove all potentially conflicting packages
+    pip uninstall -y numpy scipy scikit-learn pandas || true && \
+    # Clear pip cache to avoid cached incompatible wheels
+    pip cache purge && \
+    # Install other requirements first (excluding numpy/scipy)
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir torchmetrics
+    pip install --no-cache-dir torchmetrics && \
+    # Force reinstall correct versions AFTER other packages (this ensures they stick)
+    pip install --no-cache-dir --force-reinstall "numpy==1.26.4" && \
+    pip install --no-cache-dir --force-reinstall "scipy==1.14.1" && \
+    # Verify installation - should show NumPy 1.26.4, SciPy 1.14.1
+    python -c "import numpy; import scipy; import torch; print(f'NumPy: {numpy.__version__}, SciPy: {scipy.__version__}, PyTorch: {torch.__version__}')" && \
+    # Test the problematic import that was failing
+    python -c "from scipy import special; print('SciPy special module imported successfully')" && \
+    python -c "from pyannote.audio import Pipeline; print('pyannote.audio imported successfully')"
 
 # ---- Production: Use the same PyTorch base for consistency ----
 FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel AS production

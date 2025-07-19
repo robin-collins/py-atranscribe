@@ -61,7 +61,8 @@ show_help() {
     printf "%b📋 Usage:%b %s [OPTIONS]\n\n" "$YELLOW" "$NC" "$SCRIPT_NAME"
 
     printf "%b⚙️  Options:%b\n" "$YELLOW" "$NC"
-    printf "  --build              🔨 Build the container image with no cache\n"
+    printf "  --build              🔨 Build the container image (with cache)\n"
+    printf "  --clean-build        🧹 Build the container image with no cache\n"
     printf "  --start              🚀 Start the container in detached mode\n"
     printf "  --stop               🛑 Stop and remove containers\n"
     printf "  --restart            🔄 Restart the containers\n"
@@ -74,12 +75,13 @@ show_help() {
     printf "  --help               ❓ Show this help message and exit\n\n"
 
     printf "%b💡 Examples:%b\n" "$YELLOW" "$NC"
-    printf "  %s --build --start    # 🔨🚀 Build and start containers\n" "$SCRIPT_NAME"
-    printf "  %s --restart          # 🔄 Restart all containers\n" "$SCRIPT_NAME"
-    printf "  %s --logs web         # 📄 Show logs for 'web' service\n" "$SCRIPT_NAME"
-    printf "  %s --status           # 📊 Check container status\n" "$SCRIPT_NAME"
-    printf "  %s --clean            # 🧹 Clean up everything\n" "$SCRIPT_NAME"
-    printf "  %s --pull --build     # 📥🔨 Pull images and rebuild\n\n" "$SCRIPT_NAME"
+    printf "  %s --build --start        # 🔨🚀 Build (cached) and start containers\n" "$SCRIPT_NAME"
+    printf "  %s --clean-build --start  # 🧹🔨🚀 Clean build and start containers\n" "$SCRIPT_NAME"
+    printf "  %s --restart              # 🔄 Restart all containers\n" "$SCRIPT_NAME"
+    printf "  %s --logs web             # 📄 Show logs for 'web' service\n" "$SCRIPT_NAME"
+    printf "  %s --status               # 📊 Check container status\n" "$SCRIPT_NAME"
+    printf "  %s --clean                # 🧹 Clean up everything\n" "$SCRIPT_NAME"
+    printf "  %s --pull --clean-build   # 📥🧹🔨 Pull images and clean rebuild\n\n" "$SCRIPT_NAME"
 
     printf "%b🛠️  Additional Commands:%b\n" "$YELLOW" "$NC"
     printf "  docker compose down             # 🛑 Stop containers (manual)\n"
@@ -117,9 +119,20 @@ check_docker_daemon() {
     fi
 }
 
-# Build containers
+# Build containers (with cache)
 build_containers() {
-    info "Building container images with no cache... 🔨"
+    info "Building container images... 🔨"
+    if [[ $VERBOSE -eq 1 ]]; then
+        docker compose -f "$COMPOSE_FILE" build
+    else
+        docker compose -f "$COMPOSE_FILE" build > /dev/null 2>&1
+    fi
+    success "Container images built successfully"
+}
+
+# Build containers without cache
+clean_build_containers() {
+    info "Building container images with no cache... 🧹"
     if [[ $VERBOSE -eq 1 ]]; then
         docker compose -f "$COMPOSE_FILE" build --no-cache
     else
@@ -209,6 +222,7 @@ pull_images() {
 
 # Initialize variables
 BUILD=0
+CLEAN_BUILD=0
 START=0
 STOP=0
 RESTART=0
@@ -230,6 +244,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --build)
             BUILD=1
+            shift
+            ;;
+        --clean-build)
+            CLEAN_BUILD=1
             shift
             ;;
         --start)
@@ -313,6 +331,10 @@ main() {
 
     if [[ $BUILD -eq 1 ]]; then
         build_containers
+    fi
+
+    if [[ $CLEAN_BUILD -eq 1 ]]; then
+        clean_build_containers
     fi
 
     if [[ $STOP -eq 1 ]]; then

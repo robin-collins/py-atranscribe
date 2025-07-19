@@ -9,7 +9,6 @@ Usage:
     python auto_diarize_transcribe.py [--config CONFIG_PATH] [--log-level LEVEL]
 
 Example:
--------
     python auto_diarize_transcribe.py --config config.yaml --log-level INFO
 
 """
@@ -24,11 +23,11 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Optional
 
 import psutil
 import structlog
@@ -67,21 +66,11 @@ except ImportError:
     Pipeline = None
     PYANNOTE_AVAILABLE = False
 
-from src.config import AppConfig, create_directories, load_config, validate_config
+from src.config import create_directories, load_config, validate_config
 from src.monitoring.file_monitor import FileMonitor, ProcessingQueue
 from src.monitoring.health_check import HealthChecker
-from src.pipeline.enhanced_batch_transcriber import (
-    EnhancedBatchTranscriber as BatchTranscriber,
-)
-from src.pipeline.enhanced_batch_transcriber import ProcessingProgress
-from src.utils.error_handling import (
-    AudioProcessingError,
-    FileSystemError,
-    GPUError,
-    ModelError,
-    TranscriptionMemoryError,
-    error_tracker,
-)
+from src.pipeline.batch_transcriber import BatchTranscriber, ProcessingProgress
+from src.utils.error_handling import error_tracker, graceful_degradation
 
 # System monitoring thresholds
 CPU_USAGE_ALERT_THRESHOLD = 90  # Percentage
@@ -104,7 +93,7 @@ MINIMUM_MEMORY_GB = 2.0  # Minimum available memory in GB
 class SystemMonitor:
     """Continuous system resource monitoring and alerting."""
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config) -> None:
         """Initialize system monitor."""
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.SystemMonitor")
@@ -313,12 +302,24 @@ class StartupChecker:
 
     def print_header(self) -> None:
         """Print startup check header."""
+        print("\n" + "=" * 80)
+        print("🚀 py-atranscribe Startup Validation")
+        print("=" * 80)
 
     def print_footer(self) -> None:
         """Print startup check footer with summary."""
         elapsed_time = time.time() - self.startup_time
+        print("\n" + "=" * 80)
+        print(f"📊 Startup Check Summary (completed in {elapsed_time:.2f}s):")
+        print(f"   ✅ Passed: {self.checks_passed}")
+        print(f"   ❌ Failed: {self.checks_failed}")
+        print(f"   ⚠️  Warnings: {self.warnings}")
 
         if self.checks_failed > 0:
+            print(
+                f"\n💥 CRITICAL: {self.checks_failed} checks failed! Service cannot start.",
+            )
+            print("=" * 80)
             # Log detailed failure information
             self.logger.critical(
                 "Startup failed - %d checks failed, %d warnings, completed in %.2fs",
@@ -328,22 +329,25 @@ class StartupChecker:
             )
             return False
         if self.warnings > 0:
+            print(
+                f"\n⚠️  WARNING: {self.warnings} warnings detected. Service will start with limited functionality.",
+            )
             self.logger.warning(
                 "Startup completed with warnings - %d warnings, completed in %.2fs",
                 self.warnings,
                 elapsed_time,
             )
         else:
+            print("\n🎉 SUCCESS: All checks passed! Service ready to start.")
             self.logger.info(
                 "Startup validation successful - all %d checks passed in %.2fs",
                 self.checks_passed,
                 elapsed_time,
             )
+        print("=" * 80)
         return True
 
-    def check_item(
-        self, name: str, check_func: Callable[[], bool], critical: bool = True
-    ) -> bool:
+    def check_item(self, name: str, check_func, critical: bool = True) -> bool:
         """Run a single check and report results."""
         start_time = time.time()
         try:
@@ -351,13 +355,16 @@ class StartupChecker:
             elapsed = time.time() - start_time
 
             if result:
+                print(f"✅ {name}")
                 self.checks_passed += 1
                 self.logger.debug("Check passed: %s (%.3fs)", name, elapsed)
                 return True
             if critical:
+                print(f"❌ {name}")
                 self.checks_failed += 1
                 self.logger.error("Critical check failed: %s (%.3fs)", name, elapsed)
             else:
+                print(f"⚠️  {name}")
                 self.warnings += 1
                 self.logger.warning(
                     "Check failed with warning: %s (%.3fs)",
@@ -367,6 +374,7 @@ class StartupChecker:
         except Exception as e:
             elapsed = time.time() - start_time
             if critical:
+                print(f"❌ {name}: {e}")
                 self.checks_failed += 1
                 self.logger.exception(
                     "Critical check exception: %s - %s (%.3fs)",
@@ -375,6 +383,7 @@ class StartupChecker:
                     elapsed,
                 )
                 return False
+            print(f"⚠️  {name}: {e}")
             self.warnings += 1
             self.logger.warning(
                 "Check exception with warning: %s - %s (%.3fs)",
@@ -389,10 +398,13 @@ class StartupChecker:
     def check_python_version(self) -> bool:
         """Check Python version compatibility."""
         version = sys.version_info
-        return bool(
+        if (
             version.major == REQUIRED_PYTHON_MAJOR_VERSION
             and version.minor >= REQUIRED_PYTHON_MINOR_VERSION
-        )
+        ):
+            return True
+        print(f"   Required: Python 3.10+, Found: {version.major}.{version.minor}")
+        return False
 
     def check_system_commands(self) -> bool:
         """Check required system commands."""
@@ -402,7 +414,10 @@ class StartupChecker:
             if not shutil.which(cmd):
                 missing.append(cmd)
 
-        return not missing
+        if missing:
+            print(f"   Missing commands: {', '.join(missing)}")
+            return False
+        return True
 
     def check_python_dependencies(self) -> bool:
         """Check critical Python dependencies."""
@@ -429,7 +444,10 @@ class StartupChecker:
             except ImportError:
                 missing.append(name)
 
-        return not missing
+        if missing:
+            print(f"   Missing dependencies: {', '.join(missing)}")
+            return False
+        return True
 
     def check_optional_dependencies(self) -> bool:
         """Check optional Python dependencies."""
@@ -448,15 +466,20 @@ class StartupChecker:
             except ImportError:
                 missing.append(name)
 
-        return not missing
+        if missing:
+            print(f"   Missing optional dependencies: {', '.join(missing)}")
+            return False
+        return True
 
     def check_torch_installation(self) -> bool:
         """Check PyTorch installation and functionality."""
         try:
             if not TORCH_AVAILABLE:
+                print("   PyTorch not available")
                 return False
 
             # Print PyTorch version
+            print(f"   PyTorch version: {torch.__version__}")
 
             # Test basic torch functionality
             x = torch.tensor([1.0, 2.0, 3.0])
@@ -464,24 +487,36 @@ class StartupChecker:
 
             # Test CUDA availability in PyTorch
             cuda_available = torch.cuda.is_available()
+            print(f"   CUDA available in PyTorch: {cuda_available}")
 
             if cuda_available:
-                torch.cuda.device_count()
-                torch.cuda.current_device()
-                torch.cuda.get_device_name()
+                device_count = torch.cuda.device_count()
+                current_device = torch.cuda.current_device()
+                device_name = torch.cuda.get_device_name()
+
+                print(f"   CUDA device count: {device_count}")
+                print(f"   Current device: {current_device}")
+                print(f"   Device name: {device_name}")
 
                 # Test basic CUDA tensor operations
                 try:
                     x_cuda = torch.tensor([1.0]).cuda()
                     x_cuda + 1
-                except (RuntimeError, torch.cuda.OutOfMemoryError):
+                    print("   Basic CUDA tensor operations: Working")
+                except (RuntimeError, torch.cuda.OutOfMemoryError) as cuda_error:
+                    print(f"   Basic CUDA tensor operations: Failed - {cuda_error}")
                     return False
 
                 # Check cuDNN
                 cudnn_enabled = torch.backends.cudnn.enabled
-                (torch.backends.cudnn.version() if cudnn_enabled else "N/A")
+                cudnn_version = (
+                    torch.backends.cudnn.version() if cudnn_enabled else "N/A"
+                )
+                print(f"   cuDNN enabled: {cudnn_enabled}")
+                print(f"   cuDNN version: {cudnn_version}")
 
-        except (RuntimeError, OSError):
+        except (RuntimeError, OSError) as e:
+            print(f"   PyTorch test failed: {e}")
             return False
         else:
             return True
@@ -490,38 +525,70 @@ class StartupChecker:
         """Check CUDA availability and configuration with comprehensive diagnostics."""
         try:
             if not TORCH_AVAILABLE:
+                print("   PyTorch not available")
                 return False
 
             # Check nvidia-smi availability
-            self._check_nvidia_smi()
+            nvidia_smi_available = self._check_nvidia_smi()
 
             # Check CUDA compiler
-            self._check_cuda_compiler()
+            cuda_compiler_available = self._check_cuda_compiler()
 
             # Check cuDNN library files
-            self._check_cudnn_libraries()
+            cudnn_libraries_found = self._check_cudnn_libraries()
 
             if torch.cuda.is_available():
-                torch.cuda.device_count()
-                torch.cuda.get_device_name(0)
-                torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                device_count = torch.cuda.device_count()
+                device_name = torch.cuda.get_device_name(0)
+                memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
 
                 # Test cuDNN specifically
                 cudnn_available = (
                     torch.backends.cudnn.enabled and torch.backends.cudnn.is_available()
                 )
-                (torch.backends.cudnn.version() if cudnn_available else "N/A")
+                cudnn_version = (
+                    torch.backends.cudnn.version() if cudnn_available else "N/A"
+                )
+
+                print(
+                    f"   CUDA: {device_count} device(s), {device_name}, {memory_gb:.1f}GB",
+                )
+                print(
+                    f"   cuDNN: {'Available' if cudnn_available else 'Not Available'} (v{cudnn_version})",
+                )
+                print(
+                    f"   nvidia-smi: {'Available' if nvidia_smi_available else 'Not Available'}",
+                )
+                print(
+                    f"   CUDA compiler: {'Available' if cuda_compiler_available else 'Not Available'}",
+                )
+                print(
+                    f"   cuDNN libraries: {'Found' if cudnn_libraries_found else 'Not Found'}",
+                )
 
                 # Test basic CUDA operations
                 try:
                     x = torch.randn(100, 100).cuda()
                     y = torch.randn(100, 100).cuda()
                     torch.mm(x, y)
-                except (RuntimeError, torch.cuda.OutOfMemoryError):
+                    print("   CUDA tensor operations: Working")
+                except (RuntimeError, torch.cuda.OutOfMemoryError) as cuda_op_error:
+                    print(f"   CUDA tensor operations: Failed - {cuda_op_error}")
                     return False
 
                 return cudnn_available  # Require cuDNN for full functionality
-        except (RuntimeError, OSError):
+            print("   CUDA not available, will use CPU")
+            print(
+                f"   nvidia-smi: {'Available' if nvidia_smi_available else 'Not Available'}",
+            )
+            print(
+                f"   CUDA compiler: {'Available' if cuda_compiler_available else 'Not Available'}",
+            )
+            print(
+                f"   cuDNN libraries: {'Found' if cudnn_libraries_found else 'Not Found'}",
+            )
+        except (RuntimeError, OSError) as e:
+            print(f"   CUDA check failed: {e}")
             return False
         else:
             return False
@@ -529,11 +596,8 @@ class StartupChecker:
     def _check_nvidia_smi(self) -> bool:
         """Check if nvidia-smi is available and working."""
         try:
-            nvidia_smi_path = shutil.which("nvidia-smi")
-            if nvidia_smi_path is None:
-                return False
-            result = subprocess.run(  # noqa: S603
-                [nvidia_smi_path],
+            result = subprocess.run(
+                ["nvidia-smi"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -551,11 +615,8 @@ class StartupChecker:
     def _check_cuda_compiler(self) -> bool:
         """Check if CUDA compiler (nvcc) is available."""
         try:
-            nvcc_path = shutil.which("nvcc")
-            if nvcc_path is None:
-                return False
-            result = subprocess.run(  # noqa: S603
-                [nvcc_path, "--version"],
+            result = subprocess.run(
+                ["nvcc", "--version"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -564,18 +625,20 @@ class StartupChecker:
             if result.returncode == 0:
                 # Extract release line
                 lines = result.stdout.strip().split("\n")
-                next(
+                release_line = next(
                     (line for line in lines if "release" in line.lower()),
                     "",
                 )
+                print(f"     CUDA compiler: {release_line}")
             else:
-                pass
+                print("     CUDA compiler: Not available")
         except (
             subprocess.TimeoutExpired,
             subprocess.SubprocessError,
             FileNotFoundError,
             OSError,
         ):
+            print("     CUDA compiler: Not available")
             return False
         else:
             return result.returncode == 0
@@ -589,17 +652,10 @@ class StartupChecker:
             "/usr/lib64/",
         ]
 
-        find_path = shutil.which("find")
-        if find_path is None:
-            return False
-
         for path in cudnn_paths:
-            # Validate that path is a safe directory path
-            if not Path(path).is_absolute() or ".." in path:
-                continue
             try:
-                result = subprocess.run(  # noqa: S603
-                    [find_path, path, "-name", "*cudnn*"],
+                result = subprocess.run(
+                    ["find", path, "-name", "*cudnn*"],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -619,6 +675,8 @@ class StartupChecker:
     def check_cuda_diagnostics(self) -> bool:
         """Run comprehensive CUDA diagnostics similar to cuda-diagnostic.py."""
         try:
+            print("   Running comprehensive CUDA diagnostics...")
+
             # Check nvidia-smi with detailed output
             nvidia_smi_success = self._check_nvidia_smi_detailed()
 
@@ -632,7 +690,8 @@ class StartupChecker:
             pytorch_cuda_success = self._check_pytorch_cuda_detailed()
 
             # Summary
-            sum(
+            total_checks = 4
+            passed_checks = sum(
                 [
                     nvidia_smi_success,
                     cuda_compiler_success,
@@ -641,8 +700,11 @@ class StartupChecker:
                 ],
             )
 
+            print(f"   CUDA diagnostics: {passed_checks}/{total_checks} checks passed")
+
             # Return True if at least PyTorch CUDA works (most important for our use case)
-        except (ImportError, RuntimeError, OSError):
+        except (ImportError, RuntimeError, OSError) as e:
+            print(f"   CUDA diagnostics failed: {e}")
             return False
         else:
             return pytorch_cuda_success
@@ -650,11 +712,8 @@ class StartupChecker:
     def _check_nvidia_smi_detailed(self) -> bool:
         """Check nvidia-smi with detailed output."""
         try:
-            nvidia_smi_path = shutil.which("nvidia-smi")
-            if nvidia_smi_path is None:
-                return False
-            result = subprocess.run(  # noqa: S603
-                [nvidia_smi_path],
+            result = subprocess.run(
+                ["nvidia-smi"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -664,15 +723,16 @@ class StartupChecker:
                 # Extract first line with driver info
                 lines = result.stdout.strip().split("\n")
                 if lines:
-                    pass
+                    print(f"     nvidia-smi: {lines[0]}")
             else:
-                pass
+                print("     nvidia-smi: Not available")
         except (
             subprocess.TimeoutExpired,
             subprocess.SubprocessError,
             FileNotFoundError,
             OSError,
         ):
+            print("     nvidia-smi: Not available")
             return False
         else:
             return result.returncode == 0
@@ -680,11 +740,8 @@ class StartupChecker:
     def _check_cuda_compiler_detailed(self) -> bool:
         """Check CUDA compiler with version details."""
         try:
-            nvcc_path = shutil.which("nvcc")
-            if nvcc_path is None:
-                return False
-            result = subprocess.run(  # noqa: S603
-                [nvcc_path, "--version"],
+            result = subprocess.run(
+                ["nvcc", "--version"],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -693,18 +750,20 @@ class StartupChecker:
             if result.returncode == 0:
                 # Extract release line
                 lines = result.stdout.strip().split("\n")
-                next(
+                release_line = next(
                     (line for line in lines if "release" in line.lower()),
                     "",
                 )
+                print(f"     CUDA compiler: {release_line}")
             else:
-                pass
+                print("     CUDA compiler: Not available")
         except (
             subprocess.TimeoutExpired,
             subprocess.SubprocessError,
             FileNotFoundError,
             OSError,
         ):
+            print("     CUDA compiler: Not available")
             return False
         else:
             return result.returncode == 0
@@ -718,18 +777,11 @@ class StartupChecker:
             "/usr/lib64/",
         ]
 
-        find_path = shutil.which("find")
-        if find_path is None:
-            return False
-
         found_cudnn = False
         for path in cudnn_paths:
-            # Validate that path is a safe directory path
-            if not Path(path).is_absolute() or ".." in path:
-                continue
             try:
-                result = subprocess.run(  # noqa: S603
-                    [find_path, path, "-name", "*cudnn*"],
+                result = subprocess.run(
+                    ["find", path, "-name", "*cudnn*"],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -738,11 +790,14 @@ class StartupChecker:
                 if result.returncode == 0 and result.stdout.strip():
                     libs = result.stdout.strip().split("\n")
                     if libs:
+                        print(f"     cuDNN libraries in {path}: {len(libs)} files")
                         # Show first few libraries
-                        for _lib in libs[:CUDNN_LIBS_DISPLAY_LIMIT]:
-                            pass
+                        for lib in libs[:CUDNN_LIBS_DISPLAY_LIMIT]:
+                            print(f"       {os.path.basename(lib)}")
                         if len(libs) > CUDNN_LIBS_DISPLAY_LIMIT:
-                            pass
+                            print(
+                                f"       ... and {len(libs) - CUDNN_LIBS_DISPLAY_LIMIT} more"
+                            )
                         found_cudnn = True
                         break
             except (
@@ -754,7 +809,7 @@ class StartupChecker:
                 continue
 
         if not found_cudnn:
-            pass
+            print("     cuDNN libraries: Not found in common locations")
 
         return found_cudnn
 
@@ -762,42 +817,53 @@ class StartupChecker:
         """Check PyTorch CUDA functionality with detailed diagnostics."""
         try:
             if not TORCH_AVAILABLE:
+                print("     PyTorch: Not available")
                 return False
 
             # Always show PyTorch version (valuable for debugging)
+            print(f"     PyTorch: {torch.__version__}")
 
             # Show CUDA availability
             cuda_available = torch.cuda.is_available()
+            print(f"     CUDA available: {cuda_available}")
 
             if not cuda_available:
                 return False
 
             # Show CUDA version (from final-cuda-tests.py)
+            cuda_version = torch.version.cuda
+            print(f"     CUDA version: {cuda_version}")
 
             # Device info
             device_count = torch.cuda.device_count()
+            print(f"     Device count: {device_count}")
 
             if device_count > 0:
-                torch.cuda.get_device_name(0)
-                torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                device_name = torch.cuda.get_device_name(0)
+                memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                print(f"     Device name: {device_name}")
+                print(f"     Device memory: {memory_gb:.1f}GB")
 
             # cuDNN check
             cudnn_enabled = torch.backends.cudnn.enabled
             if cudnn_enabled:
-                torch.backends.cudnn.version()
+                cudnn_version = torch.backends.cudnn.version()
+                print(f"     cuDNN version: {cudnn_version}")
             else:
-                pass
+                print("     cuDNN: Not available")
 
             # Test tensor operations (simplified like final-cuda-tests.py)
             try:
                 # Simple tensor test
                 x = torch.tensor([1.0]).cuda()
                 x + 1  # Basic operation
+                print("     ✅ CUDA tensor test passed")
 
                 # More comprehensive test
                 x_large = torch.randn(100, 100).cuda()
                 y_large = torch.randn(100, 100).cuda()
                 torch.mm(x_large, y_large)
+                print("     ✅ CUDA matrix operations passed")
 
                 # Test cuDNN-specific operations that might fail at runtime
                 try:
@@ -805,39 +871,51 @@ class StartupChecker:
                     conv_input = torch.randn(1, 3, 32, 32).cuda()
                     conv_layer = torch.nn.Conv2d(3, 16, 3, padding=1).cuda()
                     conv_layer(conv_input)
+                    print("     ✅ cuDNN convolution operations passed")
 
                     # Test batch normalization that uses cuDNN
                     bn_input = torch.randn(1, 16, 32, 32).cuda()
                     bn_layer = torch.nn.BatchNorm2d(16).cuda()
                     bn_layer(bn_input)
+                    print("     ✅ cuDNN batch normalization passed")
 
                 except (RuntimeError, torch.cuda.OutOfMemoryError) as cudnn_error:
                     error_msg = str(cudnn_error).lower()
                     if "libcudnn" in error_msg or "cudnn" in error_msg:
+                        print(f"     ⚠️  cuDNN runtime operations failed: {cudnn_error}")
+                        print(
+                            "     ℹ️  Basic CUDA works but cuDNN has issues - will use CPU fallback",
+                        )
                         return False
+                    print(f"     ❌ CUDA operations failed: {cudnn_error}")
                     return False
                 else:
                     return True
 
-            except (RuntimeError, torch.cuda.OutOfMemoryError):
+            except (RuntimeError, torch.cuda.OutOfMemoryError) as tensor_error:
+                print(f"     ❌ CUDA tensor operations failed: {tensor_error}")
                 return False
 
-        except (RuntimeError, OSError):
+        except (RuntimeError, OSError) as e:
+            print(f"     PyTorch CUDA check failed: {e}")
             return False
 
     def check_audio_processing(self) -> bool:
         """Check audio processing capabilities."""
         try:
             if not TORCH_AVAILABLE:
+                print("   PyTorch not available")
                 return False
             if not TORCHAUDIO_AVAILABLE:
+                print("   TorchAudio not available")
                 return False
 
             # Test basic audio functionality
             sample_rate = 16000
             duration = 1.0
             torch.randn(1, int(sample_rate * duration))
-        except RuntimeError:
+        except RuntimeError as e:
+            print(f"   Audio processing test failed: {e}")
             return False
         else:
             return True
@@ -845,6 +923,7 @@ class StartupChecker:
     def check_whisper_models(self) -> bool:
         """Check Whisper model availability."""
         if not FASTER_WHISPER_AVAILABLE:
+            print("   Faster-Whisper not available")
             return False
 
         # This doesn't actually load the model, just checks if we can import
@@ -853,6 +932,7 @@ class StartupChecker:
     def check_diarization_models(self) -> bool:
         """Check diarization model availability."""
         if not PYANNOTE_AVAILABLE:
+            print("   Pyannote.audio not available")
             return False
 
         # Check if we can import the pipeline
@@ -861,9 +941,13 @@ class StartupChecker:
     def check_huggingface_token(self) -> bool:
         """Check HuggingFace token for diarization."""
         token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
-        return bool(token)
+        if token:
+            print(f"   HuggingFace token: {'*' * (len(token) - 4)}{token[-4:]}")
+            return True
+        print("   No HuggingFace token found (diarization may fail)")
+        return False
 
-    def check_file_permissions(self, config: AppConfig) -> bool:
+    def check_file_permissions(self, config) -> bool:
         """Check file system permissions for directories and critical files."""
         issues = []
 
@@ -884,6 +968,7 @@ class StartupChecker:
             try:
                 # Create directory if it doesn't exist
                 path.mkdir(parents=True, exist_ok=True)
+                print(f"     {name} directory: {path}")
 
                 # Test read permissions
                 if need_read and not os.access(path, os.R_OK):
@@ -896,141 +981,165 @@ class StartupChecker:
                     try:
                         test_file.write_text("test")
                         test_file.unlink()
+                        print(f"     {name} directory: Write access OK")
                     except (OSError, PermissionError) as e:
                         issues.append(f"{name} directory write failed: {e}")
 
             except (OSError, PermissionError) as e:
                 issues.append(f"{name} directory: {e}")
 
-        return not issues
+        if issues:
+            print(f"   Directory issues: {', '.join(issues)}")
+            return False
+        return True
 
     def check_config_file_permissions(self, config_path: str | None) -> bool:
         """Check configuration file read permissions."""
         try:
-            config_file = self._determine_config_file_path(config_path)
-            if not config_file:
-                return True  # Not critical if using defaults
-
-            if config_file.exists():
-                return self._validate_config_file_access(config_file)
+            # Determine config file path
+            if config_path:
+                config_file = Path(config_path)
+            elif os.getenv("CONFIG_PATH"):
+                config_file = Path(os.getenv("CONFIG_PATH"))
             else:
-                return False
+                # Check default locations
+                default_configs = [Path("config.yaml"), Path("config.yml")]
+                config_file = None
+                for default_config in default_configs:
+                    if default_config.exists():
+                        config_file = default_config
+                        break
 
-        except (OSError, PermissionError):
-            return False
+                if not config_file:
+                    print("   No config file found in default locations")
+                    return True  # Not critical if using defaults
 
-    def _determine_config_file_path(self, config_path: str | None) -> Path | None:
-        """Determine the configuration file path to check."""
-        if config_path:
-            return Path(config_path)
-        elif os.getenv("CONFIG_PATH"):
-            return Path(os.getenv("CONFIG_PATH"))
-        else:
-            # Check default locations
-            default_configs = [Path("config.yaml"), Path("config.yml")]
-            for default_config in default_configs:
-                if default_config.exists():
-                    return default_config
-            return None
+            if config_file and config_file.exists():
+                print(f"     Config file: {config_file}")
 
-    def _validate_config_file_access(self, config_file: Path) -> bool:
-        """Validate configuration file access and content."""
-        # Check if file is readable
-        if not os.access(config_file, os.R_OK):
-            return False
-
-        # Try to actually read the file
-        try:
-            with config_file.open(encoding="utf-8") as f:
-                content = f.read()
-                if len(content) == 0:
+                # Check if file is readable
+                if not os.access(config_file, os.R_OK):
+                    print(f"   Config file not readable: {config_file}")
                     return False
 
-            # Basic YAML syntax check
-            with contextlib.suppress(yaml.YAMLError):
-                yaml.safe_load(content)
+                # Try to actually read the file
+                try:
+                    with open(config_file, encoding="utf-8") as f:
+                        content = f.read()
+                        if len(content) == 0:
+                            print(f"   Config file is empty: {config_file}")
+                            return False
 
-        except (OSError, PermissionError, UnicodeDecodeError):
-            return False
+                    # Basic YAML syntax check
+                    try:
+                        yaml.safe_load(content)
+                        print(
+                            f"     Config file: Read access OK ({len(content)} bytes, valid YAML)",
+                        )
+                    except yaml.YAMLError as yaml_err:
+                        print(
+                            f"   Warning: Config file has YAML syntax issues: {yaml_err}",
+                        )
+                        print(
+                            f"     Config file: Read access OK ({len(content)} bytes, invalid YAML)",
+                        )
 
-        # Check parent directory write permissions (for potential config updates)
-        parent_dir = config_file.parent
-        if not os.access(parent_dir, os.W_OK):
-            pass
-            # This is just a warning, not a failure
+                except (OSError, PermissionError, UnicodeDecodeError) as e:
+                    print(f"   Failed to read config file: {e}")
+                    return False
 
-        return True
+                # Check parent directory write permissions (for potential config updates)
+                parent_dir = config_file.parent
+                if not os.access(parent_dir, os.W_OK):
+                    print(f"   Warning: Config directory not writable: {parent_dir}")
+                    # This is just a warning, not a failure
+                else:
+                    print("     Config directory: Write access OK")
 
-    def check_logging_file_permissions(self, config: AppConfig) -> bool:
-        """Check logging file permissions if file logging is enabled."""
-        try:
-            if not config.logging.file_enabled:
-                return True
-
-            log_file = Path(config.logging.file_path)
-
-            # Check if log file exists
-            if log_file.exists():
-                return self._validate_existing_log_file(log_file)
-            else:
-                return self._validate_new_log_file(log_file)
-
-        except (OSError, PermissionError):
-            return False
-
-    def _validate_existing_log_file(self, log_file: Path) -> bool:
-        """Validate existing log file permissions."""
-        # Check if existing log file is writable
-        if not os.access(log_file, os.W_OK):
-            return False
-
-        # Check log file rotation permissions (if log gets large)
-        parent_dir = log_file.parent
-        if not os.access(parent_dir, os.W_OK):
-            pass
-            # This is a warning, not a failure
-
-        return True
-
-    def _validate_new_log_file(self, log_file: Path) -> bool:
-        """Validate new log file creation permissions."""
-        # Check if parent directory exists and is writable
-        parent_dir = log_file.parent
-
-        # Try to create parent directory if it doesn't exist
-        try:
-            parent_dir.mkdir(parents=True, exist_ok=True)
-        except (OSError, PermissionError):
-            return False
-
-        # Check if parent directory is writable
-        if not os.access(parent_dir, os.W_OK):
-            return False
-
-        # Try to create and write to the log file
-        return self._test_log_file_creation(log_file)
-
-    def _test_log_file_creation(self, log_file: Path) -> bool:
-        """Test log file creation and writing."""
-        try:
-            test_content = f"# Test log entry - {datetime.now(UTC).isoformat()}\n"
-            log_file.write_text(test_content, encoding="utf-8")
-
-            # Verify we can read it back
-            read_content = log_file.read_text(encoding="utf-8")
-            if read_content != test_content:
+            elif config_file:
+                print(f"   Config file does not exist: {config_file}")
                 return False
 
-            # Clean up test file if it was just created for testing
-            if log_file.stat().st_size == len(test_content):
-                log_file.unlink()
-
-        except (OSError, PermissionError, UnicodeDecodeError):
+        except (OSError, PermissionError) as e:
+            print(f"   Config file check failed: {e}")
             return False
         else:
             return True
 
-    def check_disk_space(self, config: AppConfig) -> bool:
+    def check_logging_file_permissions(self, config) -> bool:
+        """Check logging file permissions if file logging is enabled."""
+        try:
+            if not config.logging.file_enabled:
+                print("     File logging disabled")
+                return True
+
+            log_file = Path(config.logging.file_path)
+            print(f"     Log file: {log_file}")
+
+            # Check if log file exists
+            if log_file.exists():
+                # Check if existing log file is writable
+                if not os.access(log_file, os.W_OK):
+                    print(f"   Existing log file not writable: {log_file}")
+                    return False
+                print("     Existing log file: Write access OK")
+            else:
+                # Check if parent directory exists and is writable
+                parent_dir = log_file.parent
+
+                # Try to create parent directory if it doesn't exist
+                try:
+                    parent_dir.mkdir(parents=True, exist_ok=True)
+                except (OSError, PermissionError) as e:
+                    print(f"   Cannot create log directory: {parent_dir} - {e}")
+                    return False
+
+                # Check if parent directory is writable
+                if not os.access(parent_dir, os.W_OK):
+                    print(f"   Log directory not writable: {parent_dir}")
+                    return False
+
+                # Try to create and write to the log file
+                try:
+                    test_content = (
+                        f"# Test log entry - {datetime.now(UTC).isoformat()}\n"
+                    )
+                    log_file.write_text(test_content, encoding="utf-8")
+
+                    # Verify we can read it back
+                    read_content = log_file.read_text(encoding="utf-8")
+                    if read_content != test_content:
+                        print("   Log file write/read verification failed")
+                        return False
+
+                    print("     Log file: Created and verified write access")
+
+                    # Clean up test file if it was just created for testing
+                    if log_file.stat().st_size == len(test_content):
+                        log_file.unlink()
+                        print("     Test log file cleaned up")
+
+                except (OSError, PermissionError, UnicodeDecodeError) as e:
+                    print(f"   Cannot create/write log file: {log_file} - {e}")
+                    return False
+
+            # Check log file rotation permissions (if log gets large)
+            parent_dir = log_file.parent
+            if os.access(parent_dir, os.W_OK):
+                print("     Log rotation: Directory writable for rotation")
+            else:
+                print(
+                    f"   Warning: Log directory not writable for rotation: {parent_dir}",
+                )
+                # This is a warning, not a failure
+
+        except (OSError, PermissionError) as e:
+            print(f"   Log file permissions check failed: {e}")
+            return False
+        else:
+            return True
+
+    def check_disk_space(self, config) -> bool:
         """Check available disk space."""
         try:
             directories = [
@@ -1050,8 +1159,10 @@ class StartupChecker:
                         low_space.append(f"{name}: {free_gb:.1f}GB")
 
             if low_space:
+                print(f"   Low disk space: {', '.join(low_space)}")
                 return False
-        except OSError:
+        except OSError as e:
+            print(f"   Disk space check failed: {e}")
             return False
         else:
             return True
@@ -1060,12 +1171,18 @@ class StartupChecker:
         """Check system memory availability."""
         try:
             memory = psutil.virtual_memory()
-            memory.total / (1024**3)
+            memory_gb = memory.total / (1024**3)
             available_gb = memory.available / (1024**3)
 
+            print(
+                f"   Memory: {available_gb:.1f}GB available / {memory_gb:.1f}GB total",
+            )
+
             if available_gb < MINIMUM_MEMORY_GB:
+                print("   Warning: Low memory may cause processing issues")
                 return False
-        except OSError:
+        except OSError as e:
+            print(f"   Memory check failed: {e}")
             return False
         else:
             return True
@@ -1081,7 +1198,10 @@ class StartupChecker:
             )
 
             if not is_container:
+                print("     Not running in container")
                 return True
+
+            print("     Container environment detected")
 
             # Check common container volume mount points
             container_paths = [
@@ -1100,10 +1220,11 @@ class StartupChecker:
                     try:
                         # Try to get mount information
                         path.stat()
+                        print(f"     {description}: {path} (mounted)")
                     except (OSError, PermissionError) as e:
                         mount_issues.append(f"{description} at {path}: {e}")
                 else:
-                    pass
+                    print(f"     {description}: {path} (not mounted)")
 
             # Check environment variables that should be set in containers
             container_env_vars = [
@@ -1118,15 +1239,18 @@ class StartupChecker:
             for env_var in container_env_vars:
                 value = os.getenv(env_var)
                 if value:
-                    pass
+                    print(f"     {env_var}: {value}")
                 else:
                     missing_env.append(env_var)
 
             if missing_env:
-                pass
+                print(
+                    f"   Missing container environment variables: {', '.join(missing_env)}",
+                )
 
             # This is informational, not a failure
-        except (OSError, PermissionError):
+        except (OSError, PermissionError) as e:
+            print(f"   Container mount check failed: {e}")
             return False
         else:
             return True
@@ -1136,17 +1260,20 @@ class StartupChecker:
         try:
             socket.create_connection(("8.8.8.8", 53), timeout=3)
         except (TimeoutError, OSError, ConnectionError):
+            print("   No internet connectivity (model downloads may fail)")
             return False
         else:
             return True
 
-    def run_all_checks(self, config: AppConfig, config_path: str | None = None) -> bool:
+    def run_all_checks(self, config, config_path: str | None = None) -> bool:
         """Run all startup checks."""
         self.print_header()
 
+        print("\n🔍 System Requirements:")
         self.check_item("Python Version (3.10+)", self.check_python_version)
         self.check_item("System Commands (ffmpeg, ffprobe)", self.check_system_commands)
 
+        print("\n📦 Python Dependencies:")
         self.check_item("Critical Dependencies", self.check_python_dependencies)
         self.check_item(
             "Optional Dependencies",
@@ -1154,11 +1281,13 @@ class StartupChecker:
             critical=False,
         )
 
+        print("\n🧠 ML Framework:")
         self.check_item("PyTorch Installation", self.check_torch_installation)
         self.check_item("CUDA Support", self.check_cuda_availability, critical=False)
         self.check_item("CUDA Diagnostics", self.check_cuda_diagnostics, critical=False)
         self.check_item("Audio Processing", self.check_audio_processing)
 
+        print("\n🎯 AI Models:")
         self.check_item("Whisper Models", self.check_whisper_models)
         self.check_item("Diarization Models", self.check_diarization_models)
         self.check_item(
@@ -1167,6 +1296,7 @@ class StartupChecker:
             critical=False,
         )
 
+        print("\n📁 File & Directory Permissions:")
         self.check_item(
             "Configuration File Access",
             lambda: self.check_config_file_permissions(config_path),
@@ -1185,6 +1315,7 @@ class StartupChecker:
             critical=False,
         )
 
+        print("\n💾 Storage & Resources:")
         self.check_item(
             "Disk Space",
             lambda: self.check_disk_space(config),
@@ -1196,6 +1327,7 @@ class StartupChecker:
             critical=False,
         )
 
+        print("\n🌐 Network:")
         self.check_item(
             "Internet Connectivity",
             self.check_network_connectivity,
@@ -1209,8 +1341,7 @@ class StartupChecker:
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
 
-        def signal_handler(signum: int, frame: object) -> None:
-            _ = frame  # Acknowledge parameter
+        def signal_handler(signum: int, frame: object) -> None:  # noqa: ARG001
             self.logger.info(
                 "Received signal %s, initiating graceful shutdown...",
                 signum,
@@ -1242,7 +1373,6 @@ class StartupChecker:
         """Process worker that handles files from the queue.
 
         Args:
-        ----
             worker_id: Unique identifier for this worker
 
         """
@@ -1269,10 +1399,141 @@ class StartupChecker:
 
                 worker_logger.info("Worker %s processing: %s", worker_id, file_path)
 
-                # Process the file and handle result
-                await self._process_file_in_worker(
-                    worker_id, file_path, worker_stats, worker_logger
-                )
+                # Update stats
+                self._processing_stats["files_queued"] += 1
+                self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
+                worker_stats["last_activity"] = time.time()
+
+                # Process the file
+                processing_start = time.time()
+
+                try:
+                    # Create progress callback for this file
+                    def progress_callback(progress: ProcessingProgress) -> None:
+                        """Handle progress updates for file processing."""
+                        worker_logger.debug(
+                            "Worker %s progress for %s: %s (%.1f%%)",
+                            worker_id,
+                            file_path.name,
+                            progress.stage,
+                            progress.percentage,
+                        )
+
+                        # Update last activity timestamp
+                        self._processing_stats["last_activity"] = datetime.now(
+                            UTC,
+                        ).isoformat()
+                        worker_stats["last_activity"] = time.time()
+
+                    # Process the file with progress tracking
+                    result = await self.batch_transcriber.process_file(
+                        file_path,
+                        progress_callback=progress_callback,
+                    )
+
+                    processing_time = time.time() - processing_start
+
+                    # Handle processing result
+                    if result.success:
+                        worker_logger.info(
+                            "✅ Worker %s successfully processed %s in %.2fs (transcription: %.2fs)",
+                            worker_id,
+                            file_path.name,
+                            processing_time,
+                            result.processing_time,
+                        )
+
+                        # Console output regardless of log level
+                        language = "unknown"
+                        duration = 0
+                        speakers = 0
+                        if result.transcription_info:
+                            language = result.transcription_info.get(
+                                "language",
+                                "unknown",
+                            )
+                        if result.metadata:
+                            duration = result.metadata.get("duration", 0)
+                            speakers = result.metadata.get("num_speakers", 0)
+
+                        print(
+                            f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - {language}, {duration:.1f}s, {speakers} speakers",
+                            flush=True,
+                        )
+
+                        # Update statistics
+                        worker_stats["files_processed"] += 1
+                        worker_stats["total_processing_time"] += processing_time
+                        self._processing_stats["files_completed"] += 1
+                        self._processing_stats["total_processing_time"] += (
+                            processing_time
+                        )
+
+                        # Mark file as processed in monitor
+                        self.file_monitor.mark_file_processed(file_path)
+
+                        # Log processing metadata if available
+                        if result.metadata:
+                            worker_logger.info(
+                                "File metadata - Duration: %.1fs, Segments: %d, Speakers: %d, Language: %s",
+                                result.metadata.get("duration", 0),
+                                result.metadata.get("num_segments", 0),
+                                result.metadata.get("num_speakers", 0),
+                                result.transcription_info.get("language", "unknown")
+                                if result.transcription_info
+                                else "unknown",
+                            )
+
+                        # Print updated queue status to console
+                        await self._print_queue_count()
+
+                    else:
+                        worker_logger.error(
+                            "❌ Worker %s failed to process %s after %.2fs: %s",
+                            worker_id,
+                            file_path.name,
+                            processing_time,
+                            result.error_message,
+                        )
+
+                        # Console output regardless of log level
+                        print(
+                            f"❌ Failed: {file_path.name} ({processing_time:.1f}s) - {result.error_message}",
+                            flush=True,
+                        )
+
+                        # Update failure statistics
+                        worker_stats["files_failed"] += 1
+                        self._processing_stats["files_failed"] += 1
+
+                        # Print updated queue status to console
+                        await self._print_queue_count()
+
+                except Exception as e:
+                    processing_time = time.time() - processing_start
+                    worker_logger.exception(
+                        "💥 Worker %s unexpected error processing %s after %.2fs: %s",
+                        worker_id,
+                        file_path.name,
+                        processing_time,
+                        e,
+                    )
+
+                    # Console output regardless of log level
+                    print(
+                        f"💥 Error: {file_path.name} ({processing_time:.1f}s) - {e!s}",
+                        flush=True,
+                    )
+
+                    worker_stats["files_failed"] += 1
+                    self._processing_stats["files_failed"] += 1
+
+                    # Print updated queue status to console
+                    await self._print_queue_count()
+
+                finally:
+                    # Mark task as done in queue
+                    await self.processing_queue.mark_done(file_path)
 
             except asyncio.CancelledError:
                 worker_logger.info("Worker %s cancelled", worker_id)
@@ -1286,192 +1547,6 @@ class StartupChecker:
                 await asyncio.sleep(1.0)
 
         # Log final worker statistics
-        self._log_worker_final_stats(worker_id, worker_stats, worker_logger)
-
-    async def _process_file_in_worker(
-        self,
-        worker_id: int,
-        file_path: Path,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Process a single file in a worker."""
-        # Update stats
-        self._processing_stats["files_queued"] += 1
-        self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
-        worker_stats["last_activity"] = time.time()
-
-        # Process the file
-        processing_start = time.time()
-
-        try:
-            # Create progress callback for this file
-            def progress_callback(
-                progress: ProcessingProgress, current_file: Path = file_path
-            ) -> None:
-                """Handle progress updates for file processing."""
-                worker_logger.debug(
-                    "Worker %s progress for %s: %s (%.1f%%)",
-                    worker_id,
-                    current_file.name,
-                    progress.stage,
-                    progress.percentage,
-                )
-
-                # Update last activity timestamp
-                self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
-                worker_stats["last_activity"] = time.time()
-
-            # Process the file with progress tracking
-            result = await self.batch_transcriber.process_file(
-                file_path,
-                progress_callback=progress_callback,
-            )
-
-            processing_time = time.time() - processing_start
-
-            # Handle processing result
-            if result.success:
-                await self._handle_successful_processing(
-                    worker_id,
-                    file_path,
-                    processing_time,
-                    result,
-                    worker_stats,
-                    worker_logger,
-                )
-            else:
-                await self._handle_failed_processing(
-                    worker_id,
-                    file_path,
-                    processing_time,
-                    result,
-                    worker_stats,
-                    worker_logger,
-                )
-
-        except (
-            FileSystemError,
-            ModelError,
-            TranscriptionMemoryError,
-            AudioProcessingError,
-            GPUError,
-            OSError,
-            IOError,
-            asyncio.CancelledError,
-            KeyboardInterrupt,
-        ) as e:
-            processing_time = time.time() - processing_start
-            await self._handle_processing_exception(
-                worker_id, file_path, processing_time, e, worker_stats, worker_logger
-            )
-
-        finally:
-            # Mark task as done in queue
-            await self.processing_queue.mark_done(file_path)
-
-    async def _handle_successful_processing(
-        self,
-        worker_id: int,
-        file_path: Path,
-        processing_time: float,
-        result: Any,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Handle successful file processing."""
-        worker_logger.info(
-            "✅ Worker %s successfully processed %s in %.2fs (transcription: %.2fs)",
-            worker_id,
-            file_path.name,
-            processing_time,
-            result.processing_time,
-        )
-
-        # Console output regardless of log level
-        if result.transcription_info:
-            result.transcription_info.get("language", "unknown")
-        if result.metadata:
-            result.metadata.get("duration", 0)
-            result.metadata.get("num_speakers", 0)
-
-        # Update statistics
-        worker_stats["files_processed"] += 1
-        worker_stats["total_processing_time"] += processing_time
-        self._processing_stats["files_completed"] += 1
-        self._processing_stats["total_processing_time"] += processing_time
-
-        # Mark file as processed in monitor
-        self.file_monitor.mark_file_processed(file_path)
-
-        # Log processing metadata if available
-        if result.metadata:
-            worker_logger.info(
-                "File metadata - Duration: %.1fs, Segments: %d, Speakers: %d, Language: %s",
-                result.metadata.get("duration", 0),
-                result.metadata.get("num_segments", 0),
-                result.metadata.get("num_speakers", 0),
-                result.transcription_info.get("language", "unknown")
-                if result.transcription_info
-                else "unknown",
-            )
-
-        # Print updated queue status to console
-        await self._print_queue_count()
-
-    async def _handle_failed_processing(
-        self,
-        worker_id: int,
-        file_path: Path,
-        processing_time: float,
-        result: Any,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Handle failed file processing."""
-        worker_logger.error(
-            "❌ Worker %s failed to process %s after %.2fs: %s",
-            worker_id,
-            file_path.name,
-            processing_time,
-            result.error_message,
-        )
-
-        # Update failure statistics
-        worker_stats["files_failed"] += 1
-        self._processing_stats["files_failed"] += 1
-
-        # Print updated queue status to console
-        await self._print_queue_count()
-
-    async def _handle_processing_exception(
-        self,
-        worker_id: int,
-        file_path: Path,
-        processing_time: float,
-        exception: Exception,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Handle processing exception."""
-        worker_logger.exception(
-            "💥 Worker %s unexpected error processing %s after %.2fs: %s",
-            worker_id,
-            file_path.name,
-            processing_time,
-            exception,
-        )
-
-        worker_stats["files_failed"] += 1
-        self._processing_stats["files_failed"] += 1
-
-        # Print updated queue status to console
-        await self._print_queue_count()
-
-    def _log_worker_final_stats(
-        self, worker_id: int, worker_stats: dict, worker_logger: logging.Logger
-    ) -> None:
-        """Log final worker statistics."""
         total_time = worker_stats["total_processing_time"]
         files_processed = worker_stats["files_processed"]
         avg_time = total_time / files_processed if files_processed > 0 else 0
@@ -1490,7 +1565,6 @@ class StartupChecker:
         """Handle callback when a new file is detected and ready for processing.
 
         Args:
-        ----
             file_path: Path to the detected file
 
         """
@@ -1511,9 +1585,10 @@ class StartupChecker:
             )
 
             # Console output regardless of log level
+            print(f"📁 Queued: {file_path.name} ({file_size_mb:.1f} MB)", flush=True)
 
             # Log queue status and print files waiting count
-            _ = asyncio.create_task(self._log_queue_status_and_count())  # noqa: RUF006
+            asyncio.create_task(self._log_queue_status_and_count())
 
         except Exception:
             self.logger.exception("❌ Failed to queue file %s", file_path)
@@ -1524,8 +1599,12 @@ class StartupChecker:
             await self._log_queue_status()
 
             if self.processing_queue:
-                await self.processing_queue.get_status()
+                status = await self.processing_queue.get_status()
                 # Console output regardless of log level
+                print(
+                    f"📋 Files waiting: {status['queued']}, Processing: {status['processing']}",
+                    flush=True,
+                )
         except Exception:
             self.logger.exception("Error logging queue status and count")
 
@@ -1533,8 +1612,12 @@ class StartupChecker:
         """Print current queue count to console regardless of log level."""
         try:
             if self.processing_queue:
-                await self.processing_queue.get_status()
-        except Exception:  # noqa: BLE001, S110
+                status = await self.processing_queue.get_status()
+                print(
+                    f"📋 Queue: {status['queued']} waiting, {status['processing']} processing",
+                    flush=True,
+                )
+        except Exception:  # noqa: BLE001
             # Don't log exceptions for console output helper
             pass
 
@@ -1639,7 +1722,6 @@ class TranscriptionService:
         """Initialize TranscriptionService.
 
         Args:
-        ----
             config_path: Path to configuration file
 
         """
@@ -1652,6 +1734,7 @@ class TranscriptionService:
         # Run comprehensive startup checks BEFORE any other initialization
         startup_checker = StartupChecker()
         if not startup_checker.run_all_checks(self.config, config_path):
+            print("\n💥 STARTUP FAILED: Critical checks failed. Exiting...")
             sys.exit(1)
 
         # Setup logging
@@ -1792,9 +1875,7 @@ class TranscriptionService:
 
             # Update health status
             self.health_checker.update_service_status(
-                "running",
-                file_monitor_running=True,
-                transcriber_initialized=True,
+                "running", file_monitor_running=True, transcriber_initialized=True
             )
 
             # Start processing workers
@@ -1821,8 +1902,7 @@ class TranscriptionService:
         except Exception:
             startup_time = time.time() - service_startup_start
             self.logger.exception(
-                "❌ Failed to start TranscriptionService after %.2fs",
-                startup_time,
+                "❌ Failed to start TranscriptionService after %.2fs", startup_time
             )
             await self.stop()
             raise
@@ -1884,7 +1964,7 @@ class TranscriptionService:
                 or not torch.backends.cudnn.is_available()
             ):
                 self.logger.warning(
-                    "cuDNN not available - will use CPU fallback or reduced GPU performance",
+                    "cuDNN not available - will use CPU fallback or reduced GPU performance"
                 )
                 return
 
@@ -1926,8 +2006,7 @@ class TranscriptionService:
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
 
-        def signal_handler(signum: int, frame: object) -> None:
-            _ = frame  # Acknowledge parameter
+        def signal_handler(signum: int, frame: object) -> None:  # noqa: ARG001
             self.logger.info(
                 "Received signal %s, initiating graceful shutdown...",
                 signum,
@@ -1959,7 +2038,6 @@ class TranscriptionService:
         """Process worker that handles files from the queue.
 
         Args:
-        ----
             worker_id: Unique identifier for this worker
 
         """
@@ -1986,233 +2064,152 @@ class TranscriptionService:
 
                 worker_logger.info("Worker %s processing: %s", worker_id, file_path)
 
-                # Process the file and handle result
-                await self._process_file_in_worker(
-                    worker_id, file_path, worker_stats, worker_logger
-                )
+                # Update stats
+                self._processing_stats["files_queued"] += 1
+                self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
+                worker_stats["last_activity"] = time.time()
+
+                # Process the file
+                processing_start = time.time()
+
+                try:
+                    # Create progress callback for this file
+                    def progress_callback(progress: ProcessingProgress) -> None:
+                        """Handle progress updates for file processing."""
+                        worker_logger.debug(
+                            "Worker %s progress for %s: %s (%.1f%%)",
+                            worker_id,
+                            file_path.name,
+                            progress.stage,
+                            progress.percentage,
+                        )
+
+                        # Update last activity timestamp
+                        self._processing_stats["last_activity"] = datetime.now(
+                            UTC
+                        ).isoformat()
+                        worker_stats["last_activity"] = time.time()
+
+                    # Process the file with progress tracking
+                    result = await self.batch_transcriber.process_file(
+                        file_path,
+                        progress_callback=progress_callback,
+                    )
+
+                    processing_time = time.time() - processing_start
+
+                    # Handle processing result
+                    if result.success:
+                        worker_logger.info(
+                            "✅ Worker %s successfully processed %s in %.2fs (transcription: %.2fs)",
+                            worker_id,
+                            file_path.name,
+                            processing_time,
+                            result.processing_time,
+                        )
+
+                        # Console output regardless of log level
+                        language = "unknown"
+                        duration = 0
+                        speakers = 0
+                        if result.transcription_info:
+                            language = result.transcription_info.get(
+                                "language", "unknown"
+                            )
+                        if result.metadata:
+                            duration = result.metadata.get("duration", 0)
+                            speakers = result.metadata.get("num_speakers", 0)
+
+                        print(
+                            f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - {language}, {duration:.1f}s, {speakers} speakers",
+                            flush=True,
+                        )
+
+                        # Update statistics
+                        worker_stats["files_processed"] += 1
+                        worker_stats["total_processing_time"] += processing_time
+                        self._processing_stats["files_completed"] += 1
+                        self._processing_stats["total_processing_time"] += (
+                            processing_time
+                        )
+
+                        # Mark file as processed in monitor
+                        self.file_monitor.mark_file_processed(file_path)
+
+                        # Log processing metadata if available
+                        if result.metadata:
+                            worker_logger.info(
+                                "File metadata - Duration: %.1fs, Segments: %d, Speakers: %d, Language: %s",
+                                result.metadata.get("duration", 0),
+                                result.metadata.get("num_segments", 0),
+                                result.metadata.get("num_speakers", 0),
+                                result.transcription_info.get("language", "unknown")
+                                if result.transcription_info
+                                else "unknown",
+                            )
+
+                        # Print updated queue status to console
+                        await self._print_queue_count()
+
+                    else:
+                        worker_logger.error(
+                            "❌ Worker %s failed to process %s after %.2fs: %s",
+                            worker_id,
+                            file_path.name,
+                            processing_time,
+                            result.error_message,
+                        )
+
+                        # Console output regardless of log level
+                        print(
+                            f"❌ Failed: {file_path.name} ({processing_time:.1f}s) - {result.error_message}",
+                            flush=True,
+                        )
+
+                        # Update failure statistics
+                        worker_stats["files_failed"] += 1
+                        self._processing_stats["files_failed"] += 1
+
+                        # Print updated queue status to console
+                        await self._print_queue_count()
+
+                except Exception as e:
+                    processing_time = time.time() - processing_start
+                    worker_logger.exception(
+                        "💥 Worker %s unexpected error processing %s after %.2fs: %s",
+                        worker_id,
+                        file_path.name,
+                        processing_time,
+                        e,
+                    )
+
+                    # Console output regardless of log level
+                    print(
+                        f"💥 Error: {file_path.name} ({processing_time:.1f}s) - {e!s}",
+                        flush=True,
+                    )
+
+                    worker_stats["files_failed"] += 1
+                    self._processing_stats["files_failed"] += 1
+
+                    # Print updated queue status to console
+                    await self._print_queue_count()
+
+                finally:
+                    # Mark task as done in queue
+                    await self.processing_queue.mark_done(file_path)
 
             except asyncio.CancelledError:
                 worker_logger.info("Worker %s cancelled", worker_id)
                 break
             except Exception:
                 worker_logger.exception(
-                    "Worker %s encountered unexpected error",
-                    worker_id,
+                    "Worker %s encountered unexpected error", worker_id
                 )
                 # Brief pause before retrying to prevent tight error loop
                 await asyncio.sleep(1.0)
 
         # Log final worker statistics
-        self._log_worker_final_stats(worker_id, worker_stats, worker_logger)
-
-    async def _process_file_in_worker(
-        self,
-        worker_id: int,
-        file_path: Path,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Process a single file in a worker."""
-        # Update stats
-        self._processing_stats["files_queued"] += 1
-        self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
-        worker_stats["last_activity"] = time.time()
-
-        # Process the file
-        processing_start = time.time()
-
-        try:
-            # Create progress callback for this file
-            def progress_callback(
-                progress: ProcessingProgress, current_file: Path = file_path
-            ) -> None:
-                """Handle progress updates for file processing."""
-                worker_logger.debug(
-                    "Worker %s progress for %s: %s (%.1f%%)",
-                    worker_id,
-                    current_file.name,
-                    progress.stage,
-                    progress.percentage,
-                )
-
-                # Update last activity timestamp
-                self._processing_stats["last_activity"] = datetime.now(UTC).isoformat()
-                worker_stats["last_activity"] = time.time()
-
-            # Process the file with progress tracking
-            result = await self.batch_transcriber.process_file(
-                file_path,
-                progress_callback=progress_callback,
-            )
-
-            processing_time = time.time() - processing_start
-
-            # Handle processing result
-            if result.success:
-                await self._handle_successful_processing(
-                    worker_id,
-                    file_path,
-                    processing_time,
-                    result,
-                    worker_stats,
-                    worker_logger,
-                )
-            else:
-                await self._handle_failed_processing(
-                    worker_id,
-                    file_path,
-                    processing_time,
-                    result,
-                    worker_stats,
-                    worker_logger,
-                )
-
-        except (
-            OSError,
-            IOError,
-            RuntimeError,
-            asyncio.CancelledError,
-            KeyboardInterrupt,
-        ) as e:
-            # Handle any exception that occurs during processing
-            processing_time = time.time() - processing_start
-            await self._handle_processing_exception(
-                worker_id, file_path, processing_time, e, worker_stats, worker_logger
-            )
-        except Exception as e:  # noqa: BLE001
-            # Handle any other unexpected exception that occurs during processing
-            processing_time = time.time() - processing_start
-            await self._handle_processing_exception(
-                worker_id, file_path, processing_time, e, worker_stats, worker_logger
-            )
-
-        finally:
-            # Mark task as done in queue
-            await self.processing_queue.mark_done(file_path)
-
-    async def _handle_successful_processing(
-        self,
-        worker_id: int,
-        file_path: Path,
-        processing_time: float,
-        result: Any,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Handle successful file processing."""
-        worker_logger.info(
-            "✅ Worker %s successfully processed %s in %.2fs (transcription: %.2fs)",
-            worker_id,
-            file_path.name,
-            processing_time,
-            result.processing_time,
-        )
-
-        # Console output regardless of log level
-        language = "unknown"
-        duration = 0
-        speakers = 0
-        if result.transcription_info:
-            language = result.transcription_info.get("language", "unknown")
-        if result.metadata:
-            duration = result.metadata.get("duration", 0)
-            speakers = result.metadata.get("num_speakers", 0)
-
-        print(
-            f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - "
-            f"{language}, {duration:.1f}s, {speakers} speakers",
-            flush=True,
-        )
-
-        # Update statistics
-        worker_stats["files_processed"] += 1
-        worker_stats["total_processing_time"] += processing_time
-        self._processing_stats["files_completed"] += 1
-        self._processing_stats["total_processing_time"] += processing_time
-
-        # Mark file as processed in monitor
-        self.file_monitor.mark_file_processed(file_path)
-
-        # Log processing metadata if available
-        if result.metadata:
-            worker_logger.info(
-                "File metadata - Duration: %.1fs, Segments: %d, Speakers: %d, Language: %s",
-                result.metadata.get("duration", 0),
-                result.metadata.get("num_segments", 0),
-                result.metadata.get("num_speakers", 0),
-                result.transcription_info.get("language", "unknown")
-                if result.transcription_info
-                else "unknown",
-            )
-
-        # Print updated queue status to console
-        await self._print_queue_count()
-
-    async def _handle_failed_processing(
-        self,
-        worker_id: int,
-        file_path: Path,
-        processing_time: float,
-        result: Any,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Handle failed file processing."""
-        worker_logger.error(
-            "❌ Worker %s failed to process %s after %.2fs: %s",
-            worker_id,
-            file_path.name,
-            processing_time,
-            result.error_message,
-        )
-
-        # Console output regardless of log level
-        print(
-            f"❌ Failed: {file_path.name} ({processing_time:.1f}s) - {result.error_message}",
-            flush=True,
-        )
-
-        # Update failure statistics
-        worker_stats["files_failed"] += 1
-        self._processing_stats["files_failed"] += 1
-
-        # Print updated queue status to console
-        await self._print_queue_count()
-
-    async def _handle_processing_exception(
-        self,
-        worker_id: int,
-        file_path: Path,
-        processing_time: float,
-        exception: Exception,
-        worker_stats: dict,
-        worker_logger: logging.Logger,
-    ) -> None:
-        """Handle processing exception."""
-        worker_logger.exception(
-            "💥 Worker %s unexpected error processing %s after %.2fs: %s",
-            worker_id,
-            file_path.name,
-            processing_time,
-            exception,
-        )
-
-        # Console output regardless of log level
-        print(
-            f"💥 Error: {file_path.name} ({processing_time:.1f}s) - {exception!s}",
-            flush=True,
-        )
-
-        worker_stats["files_failed"] += 1
-        self._processing_stats["files_failed"] += 1
-
-        # Print updated queue status to console
-        await self._print_queue_count()
-
-    def _log_worker_final_stats(
-        self, worker_id: int, worker_stats: dict, worker_logger: logging.Logger
-    ) -> None:
-        """Log final worker statistics."""
         total_time = worker_stats["total_processing_time"]
         files_processed = worker_stats["files_processed"]
         avg_time = total_time / files_processed if files_processed > 0 else 0
@@ -2226,6 +2223,38 @@ class TranscriptionService:
             total_time,
             avg_time,
         )
+
+    def _on_file_detected(self, file_path: Path) -> None:
+        """Handle callback when a new file is detected and ready for processing.
+
+        Args:
+            file_path: Path to the detected file
+
+        """
+        try:
+            # Get file information for logging
+            file_size = file_path.stat().st_size if file_path.exists() else 0
+            file_size_mb = file_size / (1024 * 1024)
+
+            # Add file to processing queue
+            task = asyncio.create_task(self.processing_queue.put(file_path))
+            # Store reference to prevent garbage collection
+            self._queue_task = task
+
+            self.logger.info(
+                "📁 New file detected and queued: %s (%.1f MB)",
+                file_path.name,
+                file_size_mb,
+            )
+
+            # Console output regardless of log level
+            print(f"📁 Queued: {file_path.name} ({file_size_mb:.1f} MB)", flush=True)
+
+            # Log queue status and print files waiting count
+            asyncio.create_task(self._log_queue_status_and_count())
+
+        except Exception:
+            self.logger.exception("❌ Failed to queue file %s", file_path)
 
     async def _log_queue_status(self) -> None:
         """Log current processing queue status."""
@@ -2265,42 +2294,9 @@ class TranscriptionService:
                     f"📋 Queue: {status['queued']} waiting, {status['processing']} processing",
                     flush=True,
                 )
-        except Exception:  # noqa: BLE001,S110
-            # Silently ignore exceptions for console output helper to prevent log spam
+        except Exception:  # noqa: BLE001
+            # Don't log exceptions for console output helper
             pass
-
-    def _on_file_detected(self, file_path: Path) -> None:
-        """Handle callback when a new file is detected and ready for processing.
-
-        Args:
-        ----
-            file_path: Path to the detected file
-
-        """
-        try:
-            # Get file information for logging
-            file_size = file_path.stat().st_size if file_path.exists() else 0
-            file_size_mb = file_size / (1024 * 1024)
-
-            # Add file to processing queue
-            task = asyncio.create_task(self.processing_queue.put(file_path))
-            # Store reference to prevent garbage collection
-            self._queue_task = task
-
-            self.logger.info(
-                "📁 New file detected and queued: %s (%.1f MB)",
-                file_path.name,
-                file_size_mb,
-            )
-
-            # Console output regardless of log level
-            print(f"📁 Queued: {file_path.name} ({file_size_mb:.1f} MB)", flush=True)
-
-            # Log queue status and print files waiting count
-            _ = asyncio.create_task(self._log_queue_status_and_count())  # noqa: RUF006
-
-        except Exception:
-            self.logger.exception("❌ Failed to queue file %s", file_path)
 
     async def wait_for_completion(self) -> None:
         """Wait for service shutdown completion."""
@@ -2331,8 +2327,7 @@ class TranscriptionService:
                 await self.health_checker.stop_server()
                 health_stop_time = time.time() - health_stop_start
                 self.logger.info(
-                    "Health check server stopped in %.2fs",
-                    health_stop_time,
+                    "Health check server stopped in %.2fs", health_stop_time
                 )
 
             # Stop file monitoring
@@ -2346,8 +2341,7 @@ class TranscriptionService:
             if self.worker_tasks:
                 worker_stop_start = time.time()
                 self.logger.info(
-                    "Cancelling %d worker tasks...",
-                    len(self.worker_tasks),
+                    "Cancelling %d worker tasks...", len(self.worker_tasks)
                 )
 
                 for task in self.worker_tasks:
@@ -2364,8 +2358,7 @@ class TranscriptionService:
                 await self.batch_transcriber.cleanup()
                 cleanup_time = time.time() - cleanup_start
                 self.logger.info(
-                    "Batch transcriber cleanup completed in %.2fs",
-                    cleanup_time,
+                    "Batch transcriber cleanup completed in %.2fs", cleanup_time
                 )
 
             # Log final statistics
@@ -2626,18 +2619,20 @@ async def main() -> None:
 
     except KeyboardInterrupt:
         logger.info("🛑 Received interrupt signal, shutting down...")
+        print("\nReceived interrupt signal, shutting down...")
 
         # Cancel status logging
         if "status_task" in locals() and status_task:
             status_task.cancel()
 
         sys.exit(0)
-    except Exception:
+    except Exception as e:
         # Log the exception details for debugging
         logger.exception(
             "💥 Fatal error occurred after %.2fs",
             time.time() - app_start_time,
         )
+        print(f"Fatal error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -2645,7 +2640,6 @@ async def _periodic_status_logger(service: TranscriptionService, interval: int) 
     """Periodically log service status and statistics.
 
     Args:
-    ----
         service: TranscriptionService instance
         interval: Logging interval in seconds
 
@@ -2738,4 +2732,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        print("\nShutdown complete.")
         sys.exit(0)

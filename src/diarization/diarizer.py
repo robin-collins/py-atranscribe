@@ -5,9 +5,11 @@ Provides integration with transcription pipeline for speaker-labeled transcripts
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+import numpy as np
 import torch
 
 try:

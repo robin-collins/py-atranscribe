@@ -109,6 +109,18 @@ class WhisperConfig(BaseModel):
         default=None,
         description="Initial prompt to guide transcription",
     )
+    enhanced_model: str | None = Field(
+        default="distil-whisper/distil-small.en",
+        description="Enhanced model for flash attention transcription",
+    )
+    use_flash_attention: bool = Field(
+        default=True,
+        description="Enable flash attention 2 if available",
+    )
+    language: str = Field(
+        default="auto",
+        description="Language for transcription (auto for detection)",
+    )
 
     @field_validator("model_size")
     @classmethod

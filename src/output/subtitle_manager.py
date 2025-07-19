@@ -192,6 +192,18 @@ class SubtitleManager:
         srt_subtitles = []
 
         for i, segment in enumerate(segments, 1):
+            # Handle None timing values gracefully
+            if segment.end is None or segment.start is None:
+                self.logger.warning(
+                    "Skipping segment with missing timing: start=%s, end=%s, text='%s'",
+                    segment.start,
+                    segment.end,
+                    segment.text[:50] + "..."
+                    if len(segment.text) > 50
+                    else segment.text,
+                )
+                continue
+
             start_time = timedelta(seconds=segment.start)
             end_time = timedelta(seconds=segment.end)
 
@@ -222,6 +234,18 @@ class SubtitleManager:
         vtt = webvtt.WebVTT()
 
         for segment in segments:
+            # Handle None timing values gracefully
+            if segment.end is None or segment.start is None:
+                self.logger.warning(
+                    "Skipping segment with missing timing: start=%s, end=%s, text='%s'",
+                    segment.start,
+                    segment.end,
+                    segment.text[:50] + "..."
+                    if len(segment.text) > 50
+                    else segment.text,
+                )
+                continue
+
             start_time = self._seconds_to_webvtt_time(segment.start)
             end_time = self._seconds_to_webvtt_time(segment.end)
 
@@ -241,6 +265,17 @@ class SubtitleManager:
         current_speaker = None
 
         for segment in segments:
+            # Handle None timing values gracefully
+            if segment.start is None:
+                self.logger.warning(
+                    "Skipping segment with missing start time: start=%s, text='%s'",
+                    segment.start,
+                    segment.text[:50] + "..."
+                    if len(segment.text) > 50
+                    else segment.text,
+                )
+                continue
+
             # Add speaker change marker if needed
             if segment.speaker and segment.speaker != current_speaker:
                 if current_speaker is not None:
@@ -271,6 +306,18 @@ class SubtitleManager:
         # Prepare segments data
         segments_data = []
         for i, segment in enumerate(segments):
+            # Handle None timing values gracefully
+            if segment.end is None or segment.start is None:
+                self.logger.warning(
+                    "Skipping segment with missing timing: start=%s, end=%s, text='%s'",
+                    segment.start,
+                    segment.end,
+                    segment.text[:50] + "..."
+                    if len(segment.text) > 50
+                    else segment.text,
+                )
+                continue
+
             segment_data = {
                 "id": i,
                 "start": segment.start,
@@ -314,6 +361,18 @@ class SubtitleManager:
         lines = ["start\tend\tduration\tspeaker\ttext\tconfidence"]
 
         for segment in segments:
+            # Handle None end times gracefully
+            if segment.end is None or segment.start is None:
+                self.logger.warning(
+                    "Skipping segment with missing timing: start=%s, end=%s, text='%s'",
+                    segment.start,
+                    segment.end,
+                    segment.text[:50] + "..."
+                    if len(segment.text) > 50
+                    else segment.text,
+                )
+                continue
+
             duration = segment.end - segment.start
             speaker = segment.speaker or "UNKNOWN"
             confidence = f"{segment.confidence:.3f}" if segment.confidence else "0.000"
@@ -368,15 +427,21 @@ class SubtitleManager:
             return f"{prefix}[{segment.speaker}] {segment.text}"
         return f"{prefix}{segment.text}"
 
-    def _format_timestamp(self, seconds: float) -> str:
+    def _format_timestamp(self, seconds: float | None) -> str:
         """Format seconds as [HH:MM:SS] timestamp."""
+        if seconds is None:
+            return "[00:00:00.00]"
+
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = seconds % 60
         return f"[{hours:02d}:{minutes:02d}:{secs:05.2f}]"
 
-    def _seconds_to_webvtt_time(self, seconds: float) -> str:
+    def _seconds_to_webvtt_time(self, seconds: float | None) -> str:
         """Convert seconds to WebVTT time format."""
+        if seconds is None:
+            return "00:00:00.000"
+
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = seconds % 60

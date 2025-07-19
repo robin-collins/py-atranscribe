@@ -15,7 +15,8 @@
 │  │  └── subtitle_manager.py
 │  ├── pipeline/
 │  │  ├── __init__.py
-│  │  └── batch_transcriber.py
+│  │  ├── batch_transcriber.py
+│  │  └── enhanced_batch_transcriber.py
 │  ├── transcription/
 │  │  ├── __init__.py
 │  │  └── whisper_factory.py
