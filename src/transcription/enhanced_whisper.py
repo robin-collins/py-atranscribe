@@ -15,15 +15,12 @@ import torch
 from transformers import pipeline
 from transformers.utils import is_flash_attn_2_available
 
-# Global warning filters for PyTorch/PyAnnote warnings
+# Global warning filters for PyTorch/PyAnnote warnings (excluding timestamp warning)
 warnings.filterwarnings(
     "ignore", message=".*std\\(\\): degrees of freedom is <= 0.*", category=UserWarning
 )
-warnings.filterwarnings(
-    "ignore",
-    message=".*Whisper did not predict an ending timestamp.*",
-    category=UserWarning,
-)
+# Note: Removed the timestamp warning filter since we're now properly handling timestamps
+# via return_timestamps=True which automatically enables WhisperTimestampsLogitsProcessor
 
 from src.config import WhisperConfig
 from src.utils.error_handling import TranscriptionError
@@ -55,6 +52,8 @@ class EnhancedWhisperTranscriber:
         self.logger = logging.getLogger(f"{__name__}.EnhancedWhisperTranscriber")
         self._pipeline = None
         self._device = self._determine_device()
+        # This will be set correctly during initialization.
+        self.attn_implementation: str | None = None
 
     def _determine_device(self) -> str:
         """Determine the best device for inference."""
@@ -87,8 +86,21 @@ class EnhancedWhisperTranscriber:
             # Determine model name - use distil-small.en as specified
             model_name = self._get_model_name()
 
-            # Configure model kwargs for optimization
-            model_kwargs = self._get_model_kwargs()
+            # Configure model kwargs for optimization based on insanely-fast-whisper.
+            # This is the single source of truth for attention configuration.
+            model_kwargs = {}
+            if is_flash_attn_2_available() and self._device != "mps":
+                self.attn_implementation = "flash_attention_2"
+                model_kwargs["attn_implementation"] = "flash_attention_2"
+                # CRITICAL: This must be set at initialization for Flash Attention 2.
+                model_kwargs["output_attentions"] = False
+            else:
+                self.attn_implementation = "sdpa"
+                model_kwargs["attn_implementation"] = "sdpa"
+
+            self.logger.info(
+                "Using '%s' attention implementation", self.attn_implementation
+            )
 
             # Create pipeline with optimizations
             self._pipeline = pipeline(
@@ -99,22 +111,19 @@ class EnhancedWhisperTranscriber:
                 model_kwargs=model_kwargs,
             )
 
-            # CRITICAL: Explicitly move Flash Attention model to CUDA
-            if self._device.startswith("cuda") and hasattr(self._pipeline, "model"):
-                self._pipeline.model = self._pipeline.model.to(self._device)
-                self.logger.info(
-                    "Explicitly moved Flash Attention model to %s", self._device
-                )
+            # Explicitly move model to device for Flash Attention 2 compatibility
+            self._pipeline.model = self._pipeline.model.to(self._device)
 
             # Apply device-specific optimizations
             self._apply_device_optimizations()
 
             init_time = time.time() - start_time
             self.logger.info(
-                "Enhanced Whisper pipeline initialized in %.2fs (model: %s, device: %s)",
+                "Enhanced Whisper pipeline initialized in %.2fs (model: %s, device: %s, attn: %s)",
                 init_time,
                 model_name,
                 self._device,
+                self.attn_implementation,
             )
 
         except Exception as e:
@@ -128,20 +137,6 @@ class EnhancedWhisperTranscriber:
         if hasattr(self.config, "enhanced_model") and self.config.enhanced_model:
             return self.config.enhanced_model
         return "distil-whisper/distil-small.en"
-
-    def _get_model_kwargs(self) -> dict[str, Any]:
-        """Get model kwargs with flash attention if available."""
-        model_kwargs = {}
-
-        # Add flash attention if available and not on MPS
-        if is_flash_attn_2_available() and self._device != "mps":
-            model_kwargs["attn_implementation"] = "flash_attention_2"
-            self.logger.info("Using Flash Attention 2 for enhanced performance")
-        else:
-            model_kwargs["attn_implementation"] = "sdpa"
-            self.logger.info("Using SDPA attention implementation")
-
-        return model_kwargs
 
     def _setup_performance_optimizations(self) -> None:
         """Set up performance optimizations based on device."""
@@ -162,7 +157,7 @@ class EnhancedWhisperTranscriber:
         # Suppress Flash Attention device warnings (we handle this explicitly)
         warnings.filterwarnings(
             "ignore",
-            message=".*Flash Attention 2.0.*not initialized on GPU.*",
+            message=".*You are attempting to use Flash Attention 2.0 with a model not initialized on GPU.*",
             category=UserWarning,
         )
 
@@ -176,7 +171,7 @@ class EnhancedWhisperTranscriber:
         # Suppress attention mask warnings (handled automatically by pipeline)
         warnings.filterwarnings(
             "ignore",
-            message=".*attention mask is not set.*pad token.*eos token.*",
+            message=".*The attention mask is not set and cannot be inferred from input because pad token is same as eos token.*",
             category=UserWarning,
         )
 
@@ -227,8 +222,29 @@ class EnhancedWhisperTranscriber:
             if progress_callback:
                 progress_callback(0.1, "Loading audio file")
 
-            # Configure generation kwargs
-            generate_kwargs = self._get_generate_kwargs()
+            # Configure generation kwargs based on insanely-fast-whisper
+            model_name = self._get_model_name()
+            is_english_only = model_name.endswith(".en")
+
+            # This is the most reliable way to set parameters for the pipeline.
+            generate_kwargs = {
+                "return_timestamps": True,
+                "temperature": 0.0,
+                "condition_on_prev_tokens": True,
+            }
+
+            # For multilingual models, specify task and language.
+            # English-only models will crash if these are provided.
+            if not is_english_only:
+                generate_kwargs["task"] = "transcribe"
+                if self.config.language and self.config.language.lower() != "auto":
+                    generate_kwargs["language"] = self.config.language
+
+            if hasattr(self.config, "initial_prompt") and self.config.initial_prompt:
+                generate_kwargs["initial_prompt"] = self.config.initial_prompt
+
+            # The check for output_attentions is no longer needed here,
+            # as the model is correctly configured at initialization.
 
             if progress_callback:
                 progress_callback(0.2, "Starting transcription")
@@ -236,10 +252,9 @@ class EnhancedWhisperTranscriber:
             # Perform transcription with enhanced pipeline
             outputs = self._pipeline(
                 str(audio_path),
-                chunk_length_s=30,  # 30-second chunks as in insanely-fast-whisper
+                chunk_length_s=30,
                 batch_size=self._get_batch_size(),
                 generate_kwargs=generate_kwargs,
-                return_timestamps=True,
             )
 
             if progress_callback:
@@ -281,36 +296,6 @@ class EnhancedWhisperTranscriber:
             self.logger.exception("Enhanced transcription failed: %s", audio_path.name)
             msg = f"Enhanced transcription failed: {e}"
             raise TranscriptionError(msg) from e
-
-    def _get_generate_kwargs(self) -> dict[str, Any]:
-        """Get generation kwargs for the pipeline."""
-        generate_kwargs = {}
-
-        # Set task if not English-only model
-        model_name = self._get_model_name()
-        if not model_name.endswith(".en"):
-            generate_kwargs["task"] = "transcribe"
-
-        # Set language if configured
-        if hasattr(self.config, "language") and self.config.language != "auto":
-            generate_kwargs["language"] = self.config.language
-
-        # Add timestamp handling (let pipeline handle attention_mask automatically)
-        generate_kwargs.update(
-            {
-                "return_timestamps": True,
-            }
-        )
-
-        # Add parameters to help with timestamp prediction issues
-        if hasattr(self.config, "initial_prompt") and self.config.initial_prompt:
-            generate_kwargs["condition_on_prev_tokens"] = True
-            generate_kwargs["initial_prompt"] = self.config.initial_prompt
-        else:
-            # Use a generic prompt to help with timestamp prediction
-            generate_kwargs["condition_on_prev_tokens"] = False
-
-        return generate_kwargs
 
     def _get_batch_size(self) -> int:
         """Get optimal batch size for the device."""

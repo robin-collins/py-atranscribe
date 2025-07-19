@@ -102,12 +102,24 @@ RUN mkdir -p /usr/local/cuda/lib64 && \
 RUN mkdir -p /app /data/in /data/out /data/backup /tmp/transcribe /home/transcribe/.cache && \
     chown -R transcribe:transcribe /app /data /tmp/transcribe /home/transcribe
 
-WORKDIR /app
-COPY --chown=transcribe:transcribe . .
-
-# Add entrypoint script (as root, before USER transcribe)
+# Copy entrypoint script (as root, before USER transcribe).
+# This changes less frequently than app code and should be early to be cached.
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+WORKDIR /app
+
+# --- Application Setup ---
+# Copy files that define the project and its config.
+# These layers are cached unless the files change.
+COPY --chown=transcribe:transcribe pyproject.toml ./
+COPY --chown=transcribe:transcribe config.yaml ./
+
+# Copy the application source code last.
+# This ensures that code changes do not invalidate previous, slow-to-build layers,
+# leading to much faster rebuilds during development.
+COPY --chown=transcribe:transcribe src/ ./src/
+COPY --chown=transcribe:transcribe auto_diarize_transcribe.py ./
 
 USER transcribe
 

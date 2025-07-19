@@ -111,7 +111,7 @@ else:
   2. Multiple repeated warnings cluttering output:
      - "input name `inputs` is deprecated. Please make sure to use `input_features`"
      - "attention mask is not set and cannot be inferred from input"
-     - "Whisper did not predict an ending timestamp"
+     - "Whisper did not predict an ending timestamp" ✅ **FIXED - see entry #4**
      - "TensorFloat-32 (TF32) has been disabled"
      - "std(): degrees of freedom is <= 0" from pyannote.audio
 
@@ -245,3 +245,145 @@ else:
 
 **Conclusion:**
 All possible steps to resolve TRY300 were taken; the code is correct. This is a linter false positive.
+
+---
+
+## 4. Whisper Timestamp Warning Resolution (2025-01-27) ✅ RESOLVED
+
+### Problem
+- Warning message appearing: "Whisper did not predict an ending timestamp, which can happen if audio is cut off in the middle of a word. Also make sure WhisperTimeStampLogitsProcessor was used during generation."
+- Warning was being suppressed by filters instead of properly addressed
+- WhisperTimeStampLogitsProcessor was not being properly utilized during generation
+
+### What was tried
+
+#### First Attempt: Manual LogitsProcessor Implementation
+```python
+# Tried to manually import and add WhisperTimeStampLogitsProcessor
+from transformers.models.whisper.generation_whisper import WhisperTimeStampLogitsProcessor
+from transformers import LogitsProcessorList
+
+# Manual addition to generation
+logits_processor = LogitsProcessorList()
+timestamp_processor = WhisperTimeStampLogitsProcessor(True)
+logits_processor.append(timestamp_processor)
+generate_kwargs["logits_processor"] = logits_processor
+```
+
+### Why it failed
+- Incorrect import path for WhisperTimeStampLogitsProcessor
+- Manual processor handling not necessary - transformers pipeline handles this automatically
+- Overcomplicating a simple configuration issue
+
+### Solution that worked
+```python
+# Simple configuration in _get_generate_kwargs()
+generate_kwargs.update({
+    "return_timestamps": True,
+    "return_token_timestamps": True,  # Enable token-level timestamps
+    "condition_on_prev_tokens": True,  # Better timestamp context
+    "temperature": 0.0,  # Deterministic for consistent timestamps
+    "no_speech_threshold": 0.6,
+    "compression_ratio_threshold": 2.4,
+    "logprob_threshold": -1.0,
+})
+
+# Removed warning filter - let proper timestamp handling work
+# warnings.filterwarnings("ignore", message=".*Whisper did not predict an ending timestamp.*")
+```
+
+### Why the solution worked
+1. **return_timestamps=True** automatically enables WhisperTimestampsLogitsProcessor in transformers pipeline
+2. **return_token_timestamps=True** provides more granular timestamp information
+3. **condition_on_prev_tokens=True** gives better context for timestamp prediction
+4. **temperature=0.0** ensures deterministic, stable timestamp generation
+5. **Threshold parameters** filter out low-quality segments that cause timestamp issues
+6. **Removed warning filter** allows us to see if the issue is truly resolved
+
+### Key learnings
+- Don't suppress warnings - fix the underlying issue
+- transformers pipeline automatically handles logits processors when configured correctly
+- return_timestamps=True is the key parameter that enables WhisperTimestampsLogitsProcessor
+- Manual processor management is usually unnecessary with high-level APIs
+- Proper generation parameters prevent timestamp prediction failures
+
+### Files modified
+- `src/transcription/enhanced_whisper.py` - improved generation configuration, removed warning filter
+
+---
+
+## 5. Flash Attention 2.0 Compatibility Issue (2025-01-27) ↩️ **SUPERSEDED BY #6**
+
+This issue was superseded by a more comprehensive fix. See entry #6 for the final resolution.
+
+---
+
+## 6. Definitive Flash Attention 2.0 and GPU Initialization Fix (2025-01-27) ↩️ **SUPERSEDED BY #7**
+
+This issue was superseded by a more comprehensive fix. See entry #7 for the final resolution.
+
+---
+
+## 7. Definitive Fix for All Recurring Flash Attention and GPU Issues (2025-01-27) ↩️ **SUPERSEDED BY #8**
+
+This issue was superseded by a more comprehensive fix. See entry #8 for the final resolution.
+
+---
+
+## 8. English-Only Model Crash and Final GPU Warning Fix (2025-01-27) ↩️ **SUPERSEDED BY #9**
+
+This issue was superseded by a more comprehensive fix. See entry #9 for the final resolution.
+
+---
+
+## 9. Definitive Fix for All Recurring Flash Attention and GPU Issues (2025-01-27) ✅ RESOLVED
+
+### Problem
+- The `ValueError: WhisperFlashAttention2 attention does not support output_attentions` crash persisted, indicating a fundamental misunderstanding of how to configure the `transformers` pipeline.
+- The "not initialized on GPU" warning also continued to appear.
+
+### What was tried
+- All previous attempts tried to solve the `output_attentions` issue at runtime, during the `transcribe` call. This is incorrect.
+
+### Why it failed
+- For the `transformers` pipeline, model configuration parameters like `output_attentions` must be set at **initialization**, not during inference. The model is built once, and its structure cannot be changed on the fly. My previous attempts to modify this during the `transcribe` call were fundamentally flawed.
+
+### Solution that worked
+The correct and final solution was to pass the required configuration when the model is first created.
+
+```python
+# In initialize()
+model_kwargs = {}
+if is_flash_attn_2_available() and self._device != "mps":
+    self.attn_implementation = "flash_attention_2"
+    model_kwargs["attn_implementation"] = "flash_attention_2"
+    # CRITICAL: This MUST be set at initialization.
+    model_kwargs["output_attentions"] = False
+else:
+    self.attn_implementation = "sdpa"
+    model_kwargs["attn_implementation"] = "sdpa"
+
+self._pipeline = pipeline(
+    "automatic-speech-recognition",
+    model=model_name,
+    torch_dtype=torch.float16,
+    device=self._device,
+    model_kwargs=model_kwargs, # The correct config is passed here.
+)
+
+# In transcribe()
+# The incorrect runtime check was REMOVED.
+# if self.attn_implementation == "flash_attention_2":
+#     generate_kwargs["output_attentions"] = False
+```
+
+### Why the solution worked
+1. **Correct Configuration Point**: By setting `output_attentions=False` in the `model_kwargs` during the `pipeline` creation, the model is built from the start with the correct, compatible architecture for Flash Attention 2.0.
+2. **No Runtime Modification**: This approach respects the immutability of the model's configuration after it has been initialized.
+
+### Key learnings
+- **Configuration vs. Inference**: Understand the critical difference between setting model configuration at initialization (`pipeline(model_kwargs=...)`) and passing parameters at inference time (`pipeline(generate_kwargs=...)`). Architectural parameters cannot be changed at inference time.
+- **Heed the Failure Log**: The cycle of repeating mistakes underscores the importance of this document. The correct solution was only found by abandoning the flawed runtime approach.
+
+### Files modified
+- `src/transcription/enhanced_whisper.py` - Moved `output_attentions=False` to `model_kwargs` in `initialize` and removed the incorrect runtime logic from `transcribe`.

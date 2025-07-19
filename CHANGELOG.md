@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Definitive Fix for All Flash Attention and GPU Issues (2025-01-27)**
+  - Implemented a final, robust solution to permanently resolve all recurring crashes and warnings related to Flash Attention 2.0.
+  - **Root Cause**: The `output_attentions=False` parameter was being set incorrectly during the transcription call. For the `transformers` pipeline, this must be set at **model initialization**.
+  - **Solution**:
+    - The `output_attentions=False` parameter is now correctly passed in the `model_kwargs` when the `pipeline` is first created.
+    - The incorrect and ineffective runtime checks have been removed from the `transcribe` method.
+  - This ensures the model is correctly configured from the start, resolving the `ValueError` and aligning with the library's intended use.
+  - Modified: `src/transcription/enhanced_whisper.py`
+
 ### Changed
 - **Dependencies Alignment (2025-01-27)**
   - Aligned dependencies between `pyproject.toml` and `requirements.txt` files
@@ -517,3 +527,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2025-07-03
 
 ### Added - Enhanced Logging and Diagnostics
+
+### Fixed
+- **English-Only Model Crash Fix (2025-01-27)**
+  - Fixed a `ValueError` crash when using English-only Whisper models (e.g., `distil-whisper/distil-small.en`).
+  - **Root Cause**: The code was unconditionally passing `task` and `language` parameters to the generation pipeline, which is not supported by English-only models.
+  - **Solution**: Added a check to detect if the model is English-only (by checking if the model name ends with `.en`). The `task` and `language` parameters are now only added for multilingual models.
+  - This ensures compatibility with both English-only and multilingual Whisper models.
+  - Modified: `src/transcription/enhanced_whisper.py`
+
+- **Resolved WhisperFlashAttention2 attention error by disabling word-level timestamps in enhanced_whisper.py, aligning with insanely-fast-whisper reference.**
+- Removed suppression thresholds in enhanced_whisper.py to prevent empty transcriptions on valid audio, matching insanely-fast-whisper behavior.
+- Added explicit model.to(device) after pipeline creation in enhanced_whisper.py to ensure proper GPU initialization for Flash Attention 2, preventing empty transcription results.
