@@ -189,10 +189,10 @@ class SubtitleManager:
 
     def _save_srt(self, segments: list[TranscriptSegment], output_path: Path) -> Path:
         """Save transcript in SRT format."""
-        srt_subtitles = []
-
+        # Manual SRT generation to ensure content is written
+        lines: list[str] = []
         for i, segment in enumerate(segments, 1):
-            # Handle None timing values gracefully
+            # Skip segments missing timing
             if segment.end is None or segment.start is None:
                 self.logger.warning(
                     "Skipping segment with missing timing: start=%s, end=%s, text='%s'",
@@ -203,26 +203,23 @@ class SubtitleManager:
                     else segment.text,
                 )
                 continue
-
-            start_time = timedelta(seconds=segment.start)
-            end_time = timedelta(seconds=segment.end)
-
-            # Format text with speaker label if available
+            # Format timestamps as HH:MM:SS,mmm
+            hours = int(segment.start // 3600)
+            minutes = int((segment.start % 3600) // 60)
+            seconds = int(segment.start % 60)
+            millis = int((segment.start - int(segment.start)) * 1000)
+            start_ts = f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+            hours = int(segment.end // 3600)
+            minutes = int((segment.end % 3600) // 60)
+            seconds = int(segment.end % 60)
+            millis = int((segment.end - int(segment.end)) * 1000)
+            end_ts = f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+            # Line content with optional speaker label
             text = self._format_text_with_speaker(segment)
-
-            subtitle = srt.Subtitle(
-                index=i,
-                start=start_time,
-                end=end_time,
-                content=text,
-            )
-            srt_subtitles.append(subtitle)
-
+            lines.append(f"{i}\n{start_ts} --> {end_ts}\n{text}\n\n")
         # Write SRT file
-        srt_content = srt.compose(srt_subtitles)
         with Path(output_path).open("w", encoding="utf-8") as f:
-            f.write(srt_content)
-
+            f.write("".join(lines))
         return output_path
 
     def _save_webvtt(
@@ -261,10 +258,12 @@ class SubtitleManager:
 
     def _save_txt(self, segments: list[TranscriptSegment], output_path: Path) -> Path:
         """Save transcript in plain text format."""
+        # Sort segments by start time to ensure full coverage in order
+        segments_sorted = sorted(segments, key=lambda s: s.start or 0)
         lines = []
         current_speaker = None
 
-        for segment in segments:
+        for segment in segments_sorted:
             # Handle None timing values gracefully
             if segment.start is None:
                 self.logger.warning(
@@ -292,7 +291,7 @@ class SubtitleManager:
 
         # Write text file
         with Path(output_path).open("w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+            f.write("\n".join(lines) + "\n")
 
         return output_path
 
@@ -358,9 +357,11 @@ class SubtitleManager:
 
     def _save_tsv(self, segments: list[TranscriptSegment], output_path: Path) -> Path:
         """Save transcript in TSV (Tab-Separated Values) format."""
+        # Sort segments by start time to ensure chronological order
+        segments_sorted = sorted(segments, key=lambda s: s.start or 0)
         lines = ["start\tend\tduration\tspeaker\ttext\tconfidence"]
 
-        for segment in segments:
+        for segment in segments_sorted:
             # Handle None end times gracefully
             if segment.end is None or segment.start is None:
                 self.logger.warning(
@@ -385,7 +386,7 @@ class SubtitleManager:
 
         # Write TSV file
         with Path(output_path).open("w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+            f.write("\n".join(lines) + "\n")
 
         return output_path
 

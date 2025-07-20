@@ -399,8 +399,12 @@ class FileMonitor:
     async def _check_pending_files(self) -> None:
         """Check for files that have become stable and ready for processing."""
         pending_files = self.stability_tracker.get_pending_files()
-
-        for file_path in pending_files:
+        # Only enqueue the oldest stable files up to the configured queue max size
+        pending_files.sort(
+            key=lambda p: self.stability_tracker.file_info[p].modified_time
+        )
+        max_queue = self.config.health_check.queue_size_max
+        for file_path in pending_files[:max_queue]:
             if not self.stability_tracker.is_processed(file_path):
                 self._on_file_ready(file_path)
 

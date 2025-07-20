@@ -33,6 +33,8 @@
 │  └── test_subtitle_manager.py
 ├── scripts/
 │  └── bss-pyatranscribe.sh
+├── api/
+│  └── Dockerfile
 ├── audio/
 │  ├── backup/
 │  │  └── 2025-07-03/
@@ -87,6 +89,7 @@ py-atranscribe/
 ├── CLAUDE.md                          # Instructions for Claude Code assistant
 ├── requirements.txt                   # Python package dependencies
 ├── config.yaml                        # Application configuration template
+├── .env.example                       # Environment variables template for Docker deployment
 ├── Dockerfile                         # Docker container configuration
 ├── docker-compose.yaml               # Docker compose with monitoring stack
 ├── entrypoint.sh                      # Docker container entrypoint script
@@ -100,6 +103,8 @@ py-atranscribe/
 │   └── transcribe.log                # Main application log
 ├── scripts/                           # Utility scripts
 │   └── bss-pyatranscribe.sh          # Bash script for service management
+├── api/                              # API service directory
+│   └── Dockerfile                    # API service Docker configuration
 ├── reference/                         # Reference implementation (not tracked in git)
 │   └── Whisper-WebUI-concise/        # Reference architecture patterns
 └── temp/                              # Temporary files directory

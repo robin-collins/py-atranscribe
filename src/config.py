@@ -125,7 +125,7 @@ class WhisperConfig(BaseModel):
     @field_validator("model_size")
     @classmethod
     def validate_model_size(cls, v: str) -> str:
-        """Validate the model size."""
+        """Validate the model size or accept HuggingFace model IDs."""
         valid_sizes = [
             "tiny",
             "base",
@@ -135,10 +135,11 @@ class WhisperConfig(BaseModel):
             "large-v2",
             "large-v3",
         ]
-        if v not in valid_sizes:
-            msg = f"model_size must be one of {valid_sizes}"
-            raise ValueError(msg)
-        return v
+        # Allow predefined sizes or HuggingFace model IDs (owner/repo)
+        if v in valid_sizes or "/" in v:
+            return v
+        msg = f"model_size must be one of {valid_sizes} or a HuggingFace model ID (owner/repo)"
+        raise ValueError(msg)
 
     @field_validator("device")
     @classmethod
@@ -347,7 +348,7 @@ class HealthCheckConfig(BaseModel):
         description="Maximum memory usage threshold",
     )
     queue_size_max: int = Field(
-        default=100,
+        default=20,
         ge=1,
         description="Maximum processing queue size",
     )

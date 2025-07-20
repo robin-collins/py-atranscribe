@@ -83,6 +83,9 @@ from src.utils.error_handling import (
     error_tracker,
 )
 
+with contextlib.suppress(Exception):
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+
 # System monitoring thresholds
 CPU_USAGE_ALERT_THRESHOLD = 90  # Percentage
 MEMORY_USAGE_ALERT_THRESHOLD = 85  # Percentage
@@ -1388,12 +1391,31 @@ class StartupChecker:
             result.processing_time,
         )
 
-        # Console output regardless of log level
-        if result.transcription_info:
-            result.transcription_info.get("language", "unknown")
+        # Console output regardless of log level: determine language and audio duration
+        speakers = 0
+        language = None
+        duration = 0.0
         if result.metadata:
-            result.metadata.get("duration", 0)
-            result.metadata.get("num_speakers", 0)
+            # Prefer detected language from metadata; fallback to transcription info
+            language = (
+                result.metadata.get("language")
+                or result.transcription_info.get("language")
+                if result.transcription_info
+                else None
+            )
+            # Use audio_duration if available, else fallback to duration
+            duration = result.metadata.get(
+                "audio_duration", result.metadata.get("duration", 0.0)
+            )
+            speakers = result.metadata.get("num_speakers", 0)
+        # Final default values
+        language = language or "unknown"
+        # Print summary with language, audio length, and speaker count
+        print(
+            f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - "
+            f"{language}, {duration:.1f}s, {speakers} speakers",
+            flush=True,
+        )
 
         # Update statistics
         worker_stats["files_processed"] += 1
@@ -1499,22 +1521,19 @@ class StartupChecker:
             file_size = file_path.stat().st_size if file_path.exists() else 0
             file_size_mb = file_size / (1024 * 1024)
 
-            # Add file to processing queue
-            task = asyncio.create_task(self.processing_queue.put(file_path))
-            # Store reference to prevent garbage collection
-            self._queue_task = task
+            # Queue file and print status only when it's actually added
+            async def _queue_and_print(path=file_path, size=file_size_mb):
+                added = await self.processing_queue.put(path)
+                if added:
+                    status = await self.processing_queue.get_status()
+                    print(
+                        f"📁 Queued: {path.name} ({size:.1f} MB) — queued={status['queued']}, processing={status['processing']}",
+                        flush=True,
+                    )
+                else:
+                    self.logger.debug("File not queued (duplicate/full): %s", path)
 
-            self.logger.info(
-                "📁 New file detected and queued: %s (%.1f MB)",
-                file_path.name,
-                file_size_mb,
-            )
-
-            # Console output regardless of log level
-
-            # Log queue status and print files waiting count
-            _ = asyncio.create_task(self._log_queue_status_and_count())  # noqa: RUF006
-
+            asyncio.create_task(_queue_and_print())
         except Exception:
             self.logger.exception("❌ Failed to queue file %s", file_path)
 
@@ -2108,16 +2127,26 @@ class TranscriptionService:
             result.processing_time,
         )
 
-        # Console output regardless of log level
-        language = "unknown"
-        duration = 0
+        # Console output regardless of log level: determine language and audio duration
         speakers = 0
-        if result.transcription_info:
-            language = result.transcription_info.get("language", "unknown")
+        language = None
+        duration = 0.0
         if result.metadata:
-            duration = result.metadata.get("duration", 0)
+            # Prefer detected language from metadata; fallback to transcription info
+            language = (
+                result.metadata.get("language")
+                or result.transcription_info.get("language")
+                if result.transcription_info
+                else None
+            )
+            # Use audio_duration if available, else fallback to duration
+            duration = result.metadata.get(
+                "audio_duration", result.metadata.get("duration", 0.0)
+            )
             speakers = result.metadata.get("num_speakers", 0)
-
+        # Final default values
+        language = language or "unknown"
+        # Print summary with language, audio length, and speaker count
         print(
             f"✅ Completed: {file_path.name} ({processing_time:.1f}s) - "
             f"{language}, {duration:.1f}s, {speakers} speakers",
@@ -2282,23 +2311,19 @@ class TranscriptionService:
             file_size = file_path.stat().st_size if file_path.exists() else 0
             file_size_mb = file_size / (1024 * 1024)
 
-            # Add file to processing queue
-            task = asyncio.create_task(self.processing_queue.put(file_path))
-            # Store reference to prevent garbage collection
-            self._queue_task = task
+            # Queue file and print status only when it's actually added
+            async def _queue_and_print(path=file_path, size=file_size_mb):
+                added = await self.processing_queue.put(path)
+                if added:
+                    status = await self.processing_queue.get_status()
+                    print(
+                        f"📁 Queued: {path.name} ({size:.1f} MB) — queued={status['queued']}, processing={status['processing']}",
+                        flush=True,
+                    )
+                else:
+                    self.logger.debug("File not queued (duplicate/full): %s", path)
 
-            self.logger.info(
-                "📁 New file detected and queued: %s (%.1f MB)",
-                file_path.name,
-                file_size_mb,
-            )
-
-            # Console output regardless of log level
-            print(f"📁 Queued: {file_path.name} ({file_size_mb:.1f} MB)", flush=True)
-
-            # Log queue status and print files waiting count
-            _ = asyncio.create_task(self._log_queue_status_and_count())  # noqa: RUF006
-
+            asyncio.create_task(_queue_and_print())
         except Exception:
             self.logger.exception("❌ Failed to queue file %s", file_path)
 

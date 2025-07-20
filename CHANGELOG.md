@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Optimized `api/Dockerfile` build: consolidated RUN steps and improved caching, reducing build time.
+- Enhanced outputs now segment transcripts by diarization speaker turns, collating ASR chunk texts into each turn—`.srt`, `.tsv`, and `.txt` will reflect true multi-speaker structure.
+- Queue printing now only outputs when a file is newly enqueued, eliminating repeated spam for unchanged queue status.
+- Console summary now uses metadata.language and metadata.audio_duration to correctly display detected language and file length instead of defaulting to `None` and `0.0s`.
+- Manual SRT formatting integrated to ensure `.srt` files are correctly generated from transcript segments; removed reliance on `srt.compose` for robustness.
+- Pre-flight check for Whisper model existence: verifies a local file or HuggingFace model repo before loading and logs the outcome.
+- EnhancedWhisperTranscriber now logs when the HuggingFace pipeline begins downloading/loading a model and when it's ready.
+- WhisperFactory logs whether it's using a local model file, a predefined size, or a HuggingFace repo, and fails fast if the HF model is missing.
+- WhisperConfig.model_size now accepts arbitrary HuggingFace model IDs (owner/repo) in addition to predefined sizes.
+- File monitoring now sorts pending files by modification time and only enqueues the oldest batch (up to `health_check.queue_size_max`) per scan to prevent overload and ensure prompt processing.
+- TranscriptionService now prints live queue status (queued and processing counts) inline with each queued file, e.g.: `📁 Queued: filename.ext — queued=100, processing=1`.
+- SubtitleManager: `_save_txt` now sorts segments by start time and appends a trailing newline to ensure complete text coverage.
+- SubtitleManager: `_save_tsv` now sorts segments by start time and adds a trailing newline to guarantee non-empty, correctly ordered TSV output.
+
 ### Fixed
 - **Definitive Fix for All Flash Attention and GPU Issues (2025-01-27)**
   - Implemented a final, robust solution to permanently resolve all recurring crashes and warnings related to Flash Attention 2.0.
@@ -539,3 +554,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Resolved WhisperFlashAttention2 attention error by disabling word-level timestamps in enhanced_whisper.py, aligning with insanely-fast-whisper reference.**
 - Removed suppression thresholds in enhanced_whisper.py to prevent empty transcriptions on valid audio, matching insanely-fast-whisper behavior.
 - Added explicit model.to(device) after pipeline creation in enhanced_whisper.py to ensure proper GPU initialization for Flash Attention 2, preventing empty transcription results.
+
+### Added
+- Create `.env.example` file listing placeholders for environment variables: `ADMIN_KEY`, `HF_TOKEN`, and `FLY_MACHINE_ID`.

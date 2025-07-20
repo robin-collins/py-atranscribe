@@ -14,6 +14,7 @@ from collections.abc import Callable
 import torch
 from transformers import pipeline
 from transformers.utils import is_flash_attn_2_available
+from transformers import WhisperProcessor
 
 # Global warning filters for PyTorch/PyAnnote warnings (excluding timestamp warning)
 warnings.filterwarnings(
@@ -83,8 +84,14 @@ class EnhancedWhisperTranscriber:
             # Set up warning filters
             self._setup_warning_filters()
 
-            # Determine model name - use distil-small.en as specified
+            # Determine model name - use distil-small.en or custom model as specified
             model_name = self._get_model_name()
+            self.logger.info("Loading HuggingFace pipeline for model: %s", model_name)
+
+            proc = WhisperProcessor.from_pretrained(model_name)
+            self.logger.info("WhisperProcessor loaded for model: %s", model_name)
+
+            proc.tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
 
             # Configure model kwargs for optimization based on insanely-fast-whisper.
             # This is the single source of truth for attention configuration.
@@ -109,10 +116,14 @@ class EnhancedWhisperTranscriber:
                 torch_dtype=torch.float16,
                 device=self._device,
                 model_kwargs=model_kwargs,
+                tokenizer=proc.tokenizer,
+                feature_extractor=proc.feature_extractor,
             )
 
             # Explicitly move model to device for Flash Attention 2 compatibility
             self._pipeline.model = self._pipeline.model.to(self._device)
+
+            self.logger.info("HuggingFace pipeline ready for model: %s", model_name)
 
             # Apply device-specific optimizations
             self._apply_device_optimizations()
@@ -256,6 +267,8 @@ class EnhancedWhisperTranscriber:
                 batch_size=self._get_batch_size(),
                 generate_kwargs=generate_kwargs,
             )
+
+            self.logger.debug("Raw Whisper outputs: %s", outputs)
 
             if progress_callback:
                 progress_callback(0.9, "Processing results")

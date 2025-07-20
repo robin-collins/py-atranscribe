@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import torchaudio
+
 from src.config import AppConfig
 from src.diarization.diarizer import DiarizationResult, Diarizer
 from src.output.subtitle_manager import SubtitleManager
@@ -155,6 +157,24 @@ class EnhancedBatchTranscriber:
             # Validate input file
             await self._validate_input_file(file_path)
 
+            # Check if audio is silent
+            waveform, sr = torchaudio.load(file_path)
+            rms = waveform.pow(2).mean().sqrt()
+            if rms < 1e-4:
+                self.logger.warning(
+                    f"{file_path.name} looks silent (RMS={rms:.2e}); skipping ASR."
+                )
+                report_progress(
+                    "skipped", 100.0, "Audio is silent, skipping processing."
+                )
+                return ProcessingResult(
+                    input_file=file_path,
+                    output_files={},
+                    success=True,
+                    processing_time=0.0,
+                    error_message="Silent audio detected, processing skipped.",
+                )
+
             # Execute enhanced processing pipeline
             result_data = await self._execute_enhanced_pipeline(
                 file_path, report_progress
@@ -208,9 +228,10 @@ class EnhancedBatchTranscriber:
         )
 
         if not transcription_result.chunks:
-            raise TranscriptionError(
-                "No transcription results (silent audio or processing error)"
-            )
+            self.logger.warning("No chunks in transcription, creating fallback chunk.")
+            transcription_result.chunks = [
+                {"text": transcription_result.text or "", "timestamp": [0.0, 0.0]}
+            ]
 
         report_progress(
             "transcription",
@@ -221,21 +242,29 @@ class EnhancedBatchTranscriber:
         # Stage 2: Diarization (if enabled)
         diarization_result = await self._handle_diarization(file_path, report_progress)
 
+        # Assign speakers to transcription chunks
+        labeled_chunks = transcription_result.chunks
+        if diarization_result:
+            labeled_chunks = self.diarizer.assign_speakers_to_segments(
+                transcription_result.chunks, diarization_result
+            )
+
         # Stage 3: Merge results and generate outputs
         report_progress("output", 80.0, "Generating enhanced output files...")
 
         # Convert to JSON format compatible with output converter
         json_data = self.output_converter.to_json(
             transcription_result,
-            speakers=diarization_result.speakers if diarization_result else [],
+            speakers=labeled_chunks,
         )
 
         # Generate output files
         output_files = await self._generate_enhanced_outputs(
             file_path,
-            transcription_result,
+            labeled_chunks,
             json_data,
             diarization_result,
+            transcription_result,  # Pass transcription_result
         )
 
         # Stage 4: Post-processing
@@ -293,22 +322,53 @@ class EnhancedBatchTranscriber:
     async def _generate_enhanced_outputs(
         self,
         file_path: Path,
-        transcription_result: Any,
+        labeled_chunks: list[dict[str, Any]],
         json_data: dict[str, Any],
         diarization_result: DiarizationResult | None,
+        transcription_result: Any,  # Add this parameter
     ) -> dict[str, Path]:
         """Generate enhanced output files in multiple formats."""
         base_name = file_path.stem
 
         try:
-            # Convert chunks to segments for subtitle manager compatibility
-            segments = self._convert_chunks_to_segments(transcription_result.chunks)
+            # Build segments based on diarization turns and ASR chunk overlap
+            if diarization_result and hasattr(diarization_result, "segments"):
+                segments: list[dict[str, any]] = []
+                # For each speaker turn, collate overlapping ASR chunk texts
+                for turn in diarization_result.segments:
+                    start, end = turn["start"], turn["end"]
+                    texts: list[str] = []
+                    for chunk in transcription_result.chunks:
+                        ts = chunk.get("timestamp")
+                        if (
+                            ts
+                            and isinstance(ts, (list, tuple))
+                            and len(ts) >= 2
+                            and ts[1] > start
+                            and ts[0] < end
+                        ):
+                            txt = chunk.get("text", "").strip()
+                            if txt:
+                                texts.append(txt)
+                    text = " ".join(texts).strip()
+                    if not text:
+                        continue
+                    segments.append(
+                        {
+                            "start": start,
+                            "end": end,
+                            "text": text,
+                            "speaker": turn.get("speaker_label") or turn.get("speaker"),
+                        }
+                    )
+            else:
+                segments = self._convert_chunks_to_segments(labeled_chunks)
 
             # Prepare metadata
             metadata = {
                 "duration": sum(
                     chunk_timestamp[1] - chunk_timestamp[0]
-                    for chunk in transcription_result.chunks
+                    for chunk in labeled_chunks
                     if (chunk_timestamp := chunk.get("timestamp")) is not None
                     and isinstance(chunk_timestamp, (list, tuple))
                     and len(chunk_timestamp) >= 2
@@ -374,7 +434,9 @@ class EnhancedBatchTranscriber:
                     "start": timestamp[0],
                     "end": timestamp[1],
                     "text": chunk.get("text", ""),
-                    "speaker": None,  # Will be filled by diarization if available
+                    "speaker": chunk.get(
+                        "speaker"
+                    ),  # Get speaker from chunk if available
                 }
             )
         return segments
@@ -446,7 +508,12 @@ class EnhancedBatchTranscriber:
 
         # Create metadata
         metadata = {
+            # Total audio duration based on chunk timestamps
             "duration": audio_duration,
+            # Alias for clarity in summaries
+            "audio_duration": audio_duration,
+            # Detected language from transcription result
+            "language": transcription_result.language or "unknown",
             "num_segments": len(transcription_result.chunks),
             "num_speakers": diarization_result.num_speakers
             if diarization_result

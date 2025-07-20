@@ -48,13 +48,13 @@ monitoring:
   stability_delay: 15
 
   # Polling interval (seconds)
-  poll_interval: 30
+  poll_interval: 10
 
 # Transcription settings
 transcription:
   # Whisper model configuration
   whisper:
-    model_size: "base"        # tiny, base, small, medium, large-v1, large-v2, large-v3
+    model_size: "distil-whisper/distil-large-v3.5-ggml"        # tiny, base, small, medium, large-v1, large-v2, large-v3, or HuggingFace model ID (owner/repo, e.g., "distil-whisper/distil-small.en")
     device: "auto"              # auto, cpu, cuda (auto recommended for cuDNN issues)
     compute_type: "auto"        # auto, int8, int16, float16, float32 (auto recommended)
     cpu_threads: 0              # 0 = auto
@@ -133,7 +133,7 @@ health_check:
   # Health check thresholds
   disk_space_min_gb: 1.0
   memory_usage_max_percent: 90.0
-  queue_size_max: 100
+  queue_size_max: 5
 
 # Prometheus metrics configuration
 metrics:

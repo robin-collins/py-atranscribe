@@ -4,6 +4,37 @@
 name: py-atranscribe
 
 services:
+  insanely-fast-whisper-api:
+    image: yoeven/insanely-fast-whisper-api:latest
+    container_name: ifw-api
+    hostname: ifw-api
+    restart: "unless-stopped"
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+#    volumes:
+#      - transcribe-cache:/home/transcribe/.cache
+#      - transcribe-models:/root/.cache  # For model caching
+    expose:
+      - "9000"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 2G
+
+#    GPU support (uncomment if using GPU)
+#    deploy:
+#      resources:
+#        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   transcriber:
     build:
       context: .
@@ -18,9 +49,11 @@ services:
     volumes:
 #      - /mnt/shared/raspi-audio:/data/in
       - ./temp/in:/data/in
+
 #      - /mnt/shared/raspi-audio/audio/output:/data/out
 #      - /mnt/shared/transcribed-audio:/data/out
       - ./temp/out:/data/out
+
 #      - /mnt/shared/raspi-audio/audio/backup:/data/backup
 #      - /mnt/shared/raspi-audio-backup:/data/backup
       - ./temp/backup:/data/backup

@@ -12,6 +12,8 @@ from typing import Any, ClassVar
 
 import torch
 from faster_whisper import WhisperModel
+from huggingface_hub import HfApi
+from pathlib import Path
 
 from src.config import WhisperConfig
 from src.utils.error_handling import (
@@ -140,6 +142,24 @@ class WhisperFactory:
             ModelError: If model creation fails
 
         """
+        # Pre-flight model existence check: local file or HuggingFace repo
+        requested_model = config.model_size
+        if "/" in requested_model:
+            try:
+                HfApi().model_info(requested_model)
+                self.logger.info(
+                    "Verified HuggingFace model exists: %s", requested_model
+                )
+            except Exception as e:
+                self.logger.exception(
+                    "HuggingFace model '%s' not found: %s", requested_model, e
+                )
+                msg = f"HuggingFace model '{requested_model}' not found: {e}"
+                raise ModelError(msg) from e
+        elif Path(requested_model).exists():
+            self.logger.info("Using local model file: %s", requested_model)
+        else:
+            self.logger.info("Using built-in model size: %s", requested_model)
         try:
             # Apply graceful degradation to model size
             model_size = graceful_degradation.get_model_fallback(config.model_size)

@@ -476,7 +476,12 @@ class Diarizer:
         transcript = list(transcript_segments)
         end_timestamps = np.array(
             [
-                chunk["end"] if chunk.get("end") is not None else sys.float_info.max
+                chunk["timestamp"][1]
+                if "timestamp" in chunk
+                and isinstance(chunk["timestamp"], (list, tuple))
+                and len(chunk["timestamp"]) >= 2
+                and chunk["timestamp"][1] is not None
+                else sys.float_info.max
                 for chunk in transcript
             ]
         )
@@ -494,25 +499,24 @@ class Diarizer:
 
             # Assign the current speaker to all transcription chunks up to that index
             for i in range(upto_idx + 1):
-                chunk_to_label = transcript[i]
+                chunk_to_label = transcript[i].copy()
                 chunk_to_label["speaker"] = turn["speaker"]
                 chunk_to_label["speaker_confidence"] = 1.0  # Method is deterministic
                 labeled_segments.append(chunk_to_label)
 
             # Crop the transcript and timestamp lists for the next iteration
             transcript = transcript[upto_idx + 1 :]
-            if transcript:
-                end_timestamps = end_timestamps[upto_idx + 1 :]
-            else:
-                end_timestamps = np.array([])
+            end_timestamps = end_timestamps[upto_idx + 1 :]
+            if len(end_timestamps) == 0:
+                break
 
-        # If any transcription segments remain, assign them to the last known speaker
+        # If any transcription segments remain, assign them to UNKNOWN
         if transcript:
-            last_speaker = merged_turns[-1]["speaker"] if merged_turns else "SPEAKER_00"
             for remaining_chunk in transcript:
-                remaining_chunk["speaker"] = last_speaker
-                remaining_chunk["speaker_confidence"] = 0.5  # Lower confidence
-                labeled_segments.append(remaining_chunk)
+                chunk_with_speaker = remaining_chunk.copy()
+                chunk_with_speaker["speaker"] = "UNKNOWN"
+                chunk_with_speaker["speaker_confidence"] = 0.0
+                labeled_segments.append(chunk_with_speaker)
 
         return labeled_segments
 
